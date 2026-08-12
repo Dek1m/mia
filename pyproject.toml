@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "mia"
+version = "0.0.0"
+description = "State Manager with module system and multiprocessing dispatching"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Argenta Team"}]
+dependencies = ["argenta-logging>=0.1.0"]
+
+[project.optional-dependencies]
+metrics = ["prometheus-client>=0.20.0"]
+dev = ["pytest>=7.0", "prometheus-client>=0.20.0"]
+
+[tool.setuptools]
+py-modules = ["state", "module_base", "module_manager", "api_proxy", "api_registry", "event_bus", "thread_pool", "process_pool", "cpu_affinity", "heartbeat_monitor", "shared_memory", "serializer", "logger", "metrics", "errors"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
