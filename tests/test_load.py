@@ -9,7 +9,7 @@ import pytest
 # Корень проекта — в sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from state import State
+from application import Application
 from module_base import ModuleBase, api_method
 from event_bus import EventBus
 
@@ -47,7 +47,7 @@ class TestManyApiCalls:
 
     def test_many_api_calls(self):
         """1000 последовательных API вызовов."""
-        state = State(modules_dir="modules")
+        state = Application(modules_dir="modules")
         state.startup()
         state.load_module("sample")
 
@@ -67,7 +67,7 @@ class TestManyEvents:
 
     def test_many_events(self):
         """100 публикаций с подписчиком."""
-        state = State(modules_dir="modules")
+        state = Application(modules_dir="modules")
         state.startup()
 
         received = []
@@ -94,7 +94,7 @@ class TestThreadPoolThroughput:
 
     def test_thread_pool_throughput(self):
         """100 задач отправлены через submit и завершены."""
-        state = State(modules_dir="modules")
+        state = Application(modules_dir="modules")
         state.startup()
 
         results = []
@@ -126,7 +126,7 @@ class TestProcessPoolThroughput:
 
     def test_process_pool_throughput(self):
         """50 задач отправлены в ProcessPool и завершены."""
-        state = State(modules_dir="modules")
+        state = Application(modules_dir="modules")
         state.startup()
 
         pool = state.create_process_pool(num_processes=2)

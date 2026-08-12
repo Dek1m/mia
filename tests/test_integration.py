@@ -10,7 +10,7 @@ import pytest
 # Корень проекта — в sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from state import State
+from application import Application
 from module_base import ModuleBase, api_method
 from event_bus import EventBus
 
@@ -77,7 +77,7 @@ class TestFullLifecycle:
     def test_full_lifecycle(self):
         """Полный цикл: создание → загрузка → API → выгрузка → shutdown."""
         # 1. Создание State
-        state = State(modules_dir="modules")
+        state = Application(modules_dir="modules")
         assert state is not None
 
         # 2. Startup
@@ -107,7 +107,7 @@ class TestMultipleModules:
 
     def test_multiple_modules(self):
         """Два модуля загружены, оба отвечают на API."""
-        state = State(modules_dir="modules")
+        state = Application(modules_dir="modules")
         state.startup()
 
         state.load_module("sample")
@@ -133,7 +133,7 @@ class TestEventBusBetweenModules:
 
     def test_event_bus_between_modules(self):
         """Модуль публикует событие — другой подписанный модуль получает."""
-        state = State(modules_dir="modules")
+        state = Application(modules_dir="modules")
         state.startup()
 
         state.load_module("sample")
@@ -160,7 +160,7 @@ class TestParallelApiMethod:
 
     def test_parallel_api_method(self):
         """parallel=True метод возвращает Future, выполняется в потоке."""
-        state = State(modules_dir="modules")
+        state = Application(modules_dir="modules")
         state.startup()
 
         state.load_module("sample")
@@ -179,7 +179,7 @@ class TestProcessPoolDispatch:
 
     def test_process_pool_dispatch(self):
         """ProcessPool отправляет задачи и получает результаты."""
-        state = State(modules_dir="modules")
+        state = Application(modules_dir="modules")
         state.startup()
 
         pool = state.create_process_pool(num_processes=2)
@@ -203,7 +203,7 @@ class TestHeartbeatMonitoring:
 
     def test_heartbeat_monitoring(self):
         """HeartbeatMonitor отслеживает зарегистрированные процессы."""
-        state = State(modules_dir="modules")
+        state = Application(modules_dir="modules")
         state.startup()
 
         # Регистрируем фейковый PID
@@ -267,7 +267,7 @@ class TestMetricsUpdated:
 
     def test_api_calls_do_not_crash_metrics(self):
         """API вызовы не ломают инфраструктуру метрик."""
-        state = State(modules_dir="modules")
+        state = Application(modules_dir="modules")
         state.startup()
         state.load_module("sample")
 
@@ -283,7 +283,7 @@ class TestErrorHandling:
 
     def test_error_handling(self):
         """Ошибка в модуле не крашит State — другие модули продолжают работу."""
-        state = State(modules_dir="modules")
+        state = Application(modules_dir="modules")
         state.startup()
 
         # Регистрируем модуль с ошибкой
@@ -309,7 +309,7 @@ class TestConcurrentApiCalls:
 
     def test_concurrent_api_calls(self):
         """Множественные параллельные API вызовы через ThreadPool."""
-        state = State(modules_dir="modules")
+        state = Application(modules_dir="modules")
         state.startup()
 
         state.load_module("sample")

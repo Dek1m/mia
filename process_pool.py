@@ -5,7 +5,9 @@ import os
 import queue
 import signal
 import sys
+import threading
 import time
+import uuid
 from typing import Any, Callable
 from argenta_logging import get_logger
 from metrics import processpool_active, processpool_spawned_total, processpool_killed_total
@@ -30,14 +32,15 @@ def _worker_entry(task_queue: multiprocessing.Queue, result_queue: multiprocessi
             task = task_queue.get(timeout=1.0)
             if task is None:  # Sentinel для остановки
                 break
-            fn, args, kwargs = task
-            result = fn(*args, **kwargs)
-            result_queue.put(("ok", result))
+            request_id, fn, args, kwargs = task
+            try:
+                result = fn(*args, **kwargs)
+                result_queue.put((request_id, "ok", result))
+            except Exception as e:
+                log.error("Worker error", extra={"worker_id": worker_id, "error": str(e)})
+                result_queue.put((request_id, "error", str(e)))
         except queue.Empty:
             continue
-        except Exception as e:
-            log.error("Worker error", extra={"worker_id": worker_id, "error": str(e)})
-            result_queue.put(("error", str(e)))
 
     log.info("Worker stopped", extra={"worker_id": worker_id})
 
@@ -62,6 +65,10 @@ class ProcessPool:
         self._task_queue: multiprocessing.Queue | None = None
         self._result_queue: multiprocessing.Queue | None = None
         self._restart_enabled = heartbeat_monitor is not None
+        self._lock = threading.Lock()
+        self._pending: dict[str, tuple[threading.Event, list]] = {}
+        self._reader_thread: threading.Thread | None = None
+        self._reader_running = False
         log.info("ProcessPool created", extra={"num_processes": self._num_processes})
 
     def start(self) -> None:
@@ -69,10 +76,32 @@ class ProcessPool:
         self._task_queue = multiprocessing.Queue()
         self._result_queue = multiprocessing.Queue()
 
+        # Запуск reader-потока для маршрутизации результатов
+        self._reader_running = True
+        self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
+        self._reader_thread.start()
+
         for i in range(self._num_processes):
             self._spawn_worker(i)
 
         log.info("ProcessPool started", extra={"num_processes": self._num_processes})
+
+    def _reader_loop(self) -> None:
+        """Читает результаты из result_queue и маршрутизирует по request_id."""
+        while self._reader_running:
+            try:
+                request_id, status, result = self._result_queue.get(timeout=1.0)
+            except (queue.Empty, OSError):
+                continue
+
+            with self._lock:
+                entry = self._pending.pop(request_id, None)
+
+            if entry:
+                event, container = entry
+                container[0] = status
+                container[1] = result
+                event.set()
 
     def _spawn_worker(self, worker_id: int) -> None:
         """Запустить один worker-процесс."""
@@ -92,26 +121,47 @@ class ProcessPool:
 
         log.info("Worker spawned", extra={"worker_id": worker_id, "pid": p.pid})
 
-    def submit(self, fn: Callable, *args, **kwargs) -> Any:
+    def submit(self, fn: Callable, *args, timeout: float | None = None, **kwargs) -> Any:
         """Отправить задачу и дождаться результата.
 
         Args:
             fn: Функция для выполнения.
             *args: Позиционные аргументы.
+            timeout: Максимальное время ожидания (сек). None — бесконечно.
             **kwargs: Именованные аргументы.
 
         Returns:
             Результат выполнения.
+
+        Raises:
+            TimeoutError: Если превышен timeout.
         """
         if self._task_queue is None:
             raise RuntimeError("ProcessPool not started. Call start() first.")
 
-        self._task_queue.put((fn, args, kwargs))
+        request_id = uuid.uuid4().hex
+        result_event = threading.Event()
+        result_container = [None, None]  # [status, result]
+
+        with self._lock:
+            self._pending[request_id] = (result_event, result_container)
+
+        try:
+            self._task_queue.put((request_id, fn, args, kwargs))
+        except (OSError, ValueError):
+            with self._lock:
+                self._pending.pop(request_id, None)
+            raise RuntimeError("ProcessPool is shut down")
 
         # Обновить heartbeat при отправке задачи
         self._update_heartbeat_for_active_workers()
 
-        status, result = self._result_queue.get()
+        if not result_event.wait(timeout=timeout):
+            with self._lock:
+                self._pending.pop(request_id, None)
+            raise TimeoutError(f"Task timed out after {timeout}s")
+
+        status, result = result_container
 
         # Обновить heartbeat после получения результата
         self._update_heartbeat_for_active_workers()
@@ -133,25 +183,26 @@ class ProcessPool:
         if not self._restart_enabled:
             return
 
-        worker_id = self._worker_ids.get(dead_pid, 0)
+        with self._lock:
+            worker_id = self._worker_ids.get(dead_pid, 0)
 
-        # Убрать мёртвого воркера
-        self._workers.pop(dead_pid, None)
-        self._worker_ids.pop(dead_pid, None)
-        self._heartbeat_monitor.unregister(dead_pid)
+            # Убрать мёртвого воркера
+            self._workers.pop(dead_pid, None)
+            self._worker_ids.pop(dead_pid, None)
+            self._heartbeat_monitor.unregister(dead_pid)
 
-        processpool_active.dec()
-        processpool_killed_total.inc()
+            processpool_active.dec()
+            processpool_killed_total.inc()
 
-        log.warning("Worker died, restarting", extra={"dead_pid": dead_pid, "worker_id": worker_id})
+            log.warning("Worker died, restarting", extra={"dead_pid": dead_pid, "worker_id": worker_id})
 
-        # Запустить нового воркера
-        self._spawn_worker(worker_id)
+            # Запустить нового воркера
+            self._spawn_worker(worker_id)
 
-        # Публикация события happen AFTER restart
-        # Импорт здесь чтобы избежать циклических импортов
-        from event_bus import EVENT_PROCESS_RESTARTED
-        log.info("Worker restarted", extra={"worker_id": worker_id})
+            # Публикация события happen AFTER restart
+            # Импорт здесь чтобы избежать циклических импортов
+            from event_bus import EVENT_PROCESS_RESTARTED
+            log.info("Worker restarted", extra={"worker_id": worker_id})
 
     def shutdown(self, timeout: float = 5.0) -> None:
         """Остановить пул процессов.
@@ -176,6 +227,11 @@ class ProcessPool:
             if p.is_alive():
                 p.terminate()
                 processpool_killed_total.inc()
+
+        # Остановить reader-поток
+        self._reader_running = False
+        if self._reader_thread:
+            self._reader_thread.join(timeout=2)
 
         self._workers.clear()
         self._worker_ids.clear()

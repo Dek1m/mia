@@ -1,4 +1,5 @@
 """Event Bus — события между модулями."""
+import threading
 from typing import Any, Callable
 from collections import defaultdict
 
@@ -16,22 +17,26 @@ class EventBus:
 
     def __init__(self) -> None:
         self._subscribers: dict[str, list[Callable]] = defaultdict(list)
+        self._lock = threading.RLock()
 
     def subscribe(self, event: str, handler: Callable) -> None:
         """Подписаться на событие."""
-        self._subscribers[event].append(handler)
+        with self._lock:
+            self._subscribers[event].append(handler)
         log.debug("Subscribed to event", extra={"event": event, "handler": handler.__name__})
 
     def unsubscribe(self, event: str, handler: Callable) -> None:
         """Отписаться от события."""
-        if event in self._subscribers:
-            self._subscribers[event] = [
-                h for h in self._subscribers[event] if h != handler
-            ]
+        with self._lock:
+            if event in self._subscribers:
+                self._subscribers[event] = [
+                    h for h in self._subscribers[event] if h != handler
+                ]
 
     def publish(self, event: str, data: Any = None) -> None:
         """Опубликовать событие."""
-        handlers = self._subscribers.get(event, [])
+        with self._lock:
+            handlers = list(self._subscribers.get(event, []))
         log.info("Event published", extra={"event": event, "handlers_count": len(handlers)})
         for handler in handlers:
             try:
@@ -45,4 +50,5 @@ class EventBus:
 
     def clear(self) -> None:
         """Очистить все подписки."""
-        self._subscribers.clear()
+        with self._lock:
+            self._subscribers.clear()

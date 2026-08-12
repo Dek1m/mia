@@ -9,7 +9,7 @@ class NotificationsModule(ModuleBase):
     def name(self) -> str:
         return "notifications"
 
-    def on_load(self, state: "State") -> None:  # noqa: F821
+    def on_load(self, state: "Application") -> None:  # noqa: F821
         self._state = state
         state.event_bus.subscribe("data.processed", self._on_data_processed)
 

@@ -1,6 +1,7 @@
 """Circuit Breaker — защита от каскадных сбоев."""
 from __future__ import annotations
 
+import threading
 import time
 from enum import Enum
 from typing import Any, Callable
@@ -39,14 +40,16 @@ class CircuitBreaker:
         self._failure_count = 0
         self._success_count = 0
         self._last_failure_time: float = 0.0
+        self._lock = threading.RLock()
 
     @property
     def state(self) -> State:
         """Текущее состояние."""
-        if self._state == State.OPEN:
-            if time.monotonic() - self._last_failure_time >= self._recovery_timeout:
-                self._transition(State.HALF_OPEN)
-        return self._state
+        with self._lock:
+            if self._state == State.OPEN:
+                if time.monotonic() - self._last_failure_time >= self._recovery_timeout:
+                    self._transition(State.HALF_OPEN)
+            return self._state
 
     def _transition(self, new_state: State) -> None:
         """Переход в новое состояние с логированием."""
@@ -89,29 +92,31 @@ class CircuitBreaker:
 
     def _record_failure(self) -> None:
         """Зафиксировать ошибку."""
-        self._failure_count += 1
-        self._success_count = 0
-        self._last_failure_time = time.monotonic()
+        with self._lock:
+            self._failure_count += 1
+            self._success_count = 0
+            self._last_failure_time = time.monotonic()
 
-        log.warning(
-            "Circuit breaker failure recorded",
-            extra={"failures": self._failure_count, "threshold": self._failure_threshold},
-        )
+            log.warning(
+                "Circuit breaker failure recorded",
+                extra={"failures": self._failure_count, "threshold": self._failure_threshold},
+            )
 
-        if self._failure_count >= self._failure_threshold:
-            self._transition(State.OPEN)
+            if self._failure_count >= self._failure_threshold:
+                self._transition(State.OPEN)
 
     def _record_success(self) -> None:
         """Зафиксировать успех."""
-        if self._state == State.HALF_OPEN:
-            self._success_count += 1
-            log.info(
-                "Circuit breaker success in HALF_OPEN",
-                extra={"successes": self._success_count, "threshold": self._success_threshold},
-            )
-            if self._success_count >= self._success_threshold:
+        with self._lock:
+            if self._state == State.HALF_OPEN:
+                self._success_count += 1
+                log.info(
+                    "Circuit breaker success in HALF_OPEN",
+                    extra={"successes": self._success_count, "threshold": self._success_threshold},
+                )
+                if self._success_count >= self._success_threshold:
+                    self._failure_count = 0
+                    self._success_count = 0
+                    self._transition(State.CLOSED)
+            else:
                 self._failure_count = 0
-                self._success_count = 0
-                self._transition(State.CLOSED)
-        else:
-            self._failure_count = 0

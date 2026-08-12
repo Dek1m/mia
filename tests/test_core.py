@@ -1,21 +1,20 @@
 """Unit-тесты для core компонентов: State, ModuleManager, ModuleBase."""
 import pytest
-from state import State
+from application import Application
 from module_base import ModuleBase, api_method
 from modules.sample import SampleModule
 from errors import ModuleLoadError
 
 
 def test_state_creation():
-    """State() создаётся без ошибок."""
-    state = State()
+    """Application() создаётся без ошибок."""
+    state = Application()
     assert state is not None
-    assert isinstance(state, State)
 
 
 def test_load_sample_module():
     """Загрузка модуля sample."""
-    state = State(modules_dir="modules")
+    state = Application(modules_dir="modules")
     state.load_module("sample")
     
     # Проверяем, что модуль загружен
@@ -26,7 +25,7 @@ def test_load_sample_module():
 
 def test_api_call():
     """Вызов state.api.sample.add(1, 2) == 3."""
-    state = State(modules_dir="modules")
+    state = Application(modules_dir="modules")
     state.load_module("sample")
     
     # Вызов API метода
@@ -36,7 +35,7 @@ def test_api_call():
 
 def test_api_multiply():
     """Вызов state.api.sample.multiply(3, 4) == 12."""
-    state = State(modules_dir="modules")
+    state = Application(modules_dir="modules")
     state.load_module("sample")
     
     # Вызов API метода
@@ -46,7 +45,7 @@ def test_api_multiply():
 
 def test_unload_module():
     """Выгрузка модуля."""
-    state = State(modules_dir="modules")
+    state = Application(modules_dir="modules")
     state.load_module("sample")
     
     # Выгружаем
@@ -62,7 +61,7 @@ def test_unload_module():
 
 def test_load_nonexistent_module():
     """Ошибка при загрузке несуществующего модуля."""
-    state = State(modules_dir="modules")
+    state = Application(modules_dir="modules")
     
     # Попытка загрузить несуществующий модуль
     with pytest.raises(ModuleLoadError):
@@ -71,7 +70,7 @@ def test_load_nonexistent_module():
 
 def test_shutdown():
     """Shutdown выгружает все модули."""
-    state = State(modules_dir="modules")
+    state = Application(modules_dir="modules")
     
     # Загружаем несколько модулей (пока только sample)
     state.load_module("sample")
@@ -99,7 +98,7 @@ def test_api_method_decorator():
 
 def test_api_nonexistent_method():
     """Попытка вызова несуществующего API метода."""
-    state = State(modules_dir="modules")
+    state = Application(modules_dir="modules")
     state.load_module("sample")
     
     # Попытка вызвать несуществующий метод
@@ -109,7 +108,7 @@ def test_api_nonexistent_method():
 
 def test_api_nonexistent_module():
     """Попытка доступа к API несуществующего модуля."""
-    state = State(modules_dir="modules")
+    state = Application(modules_dir="modules")
     
     # Попытка доступа к API несуществующего модуля
     with pytest.raises(AttributeError):
@@ -118,7 +117,7 @@ def test_api_nonexistent_module():
 
 def test_load_already_loaded():
     """Повторная загрузка уже загруженного модуля."""
-    state = State(modules_dir="modules")
+    state = Application(modules_dir="modules")
     state.load_module("sample")
     
     # Повторная загрузка не должна вызывать ошибку
@@ -142,7 +141,7 @@ def test_module_base_version():
 
 def test_module_on_load():
     """Проверка вызова on_load."""
-    state = State(modules_dir="modules")
+    state = Application(modules_dir="modules")
     state.load_module("sample")
     
     # on_load уже был вызван при загрузке

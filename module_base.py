@@ -55,11 +55,11 @@ class ModuleBase(ABC):
         """Версия модуля по умолчанию."""
         return "0.0.0"
 
-    def on_load(self, state: "State") -> None:  # noqa: F821
+    def on_load(self, state: "Application") -> None:  # noqa: F821
         """Вызывается при загрузке модуля. Инициализация.
 
         Args:
-            state: Экземпляр State для доступа к другим модулям и API.
+            state: Экземпляр Application для доступа к другим модулям и API.
         """
         pass
 

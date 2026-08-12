@@ -16,7 +16,7 @@ import os
 # Корень проекта — в sys.path для импортов
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from state import State
+from application import Application
 
 
 def heavy_task(n: int) -> int:
@@ -32,7 +32,7 @@ def main() -> None:
 
     # ── 1. Создание State ──────────────────────────────────────
     print("\n[1] Создание State...")
-    state = State(modules_dir="modules")
+    state = Application(modules_dir="modules")
     state.startup()
     print(f"    ThreadPool запущен: {state.thread_pool is not None}")
     print(f"    Heartbeat запущен: {state.heartbeat_monitor is not None}")
