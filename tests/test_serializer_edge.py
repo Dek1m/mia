@@ -6,7 +6,7 @@ import pickle
 
 import pytest
 
-from serializer import Serializer, SafeUnpickler
+from storage.serializer import Serializer, SafeUnpickler
 
 
 # === Десериализация мусора ===

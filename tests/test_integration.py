@@ -10,16 +10,16 @@ import pytest
 # Корень проекта — в sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from application import Application
-from module_base import ModuleBase, api_method
-from event_bus import EventBus
+from core.application import Application
+from modules_system.module_base import ModuleBase, api_method
+from communication.event_bus import EventBus
 
 
 # ── Вспомогательные функции и модули ──────────────────────────────
 
 
 def heavy_task(n: int) -> int:
-    """Функция для ProcessPool — должна быть на верхнем уровне."""
+    """Функция для WorkerManager — должна быть на верхнем уровне."""
     return sum(i * i for i in range(n))
 
 
@@ -174,26 +174,37 @@ class TestParallelApiMethod:
         state.shutdown()
 
 
-class TestProcessPoolDispatch:
-    """ProcessPool dispatchates задачи."""
+class TestWorkerManagerDispatch:
+    """WorkerManager dispatches задачи."""
 
-    def test_process_pool_dispatch(self):
-        """ProcessPool отправляет задачи и получает результаты."""
+    def test_worker_manager_dispatch(self):
+        """WorkerManager отправляет задачи и получает результаты."""
         state = Application(modules_dir="modules")
         state.startup()
 
-        pool = state.create_process_pool(num_processes=2)
-        assert pool is not None
+        wm = state.worker_manager
+        assert wm is not None
 
-        # Отправляем задачу
-        result = pool.submit(heavy_task, 100)
+        result = wm.submit(heavy_task, 100)
         expected = sum(i * i for i in range(100))
         assert result == expected
 
-        # Вторая задача
-        result2 = pool.submit(heavy_task, 10)
-        expected2 = sum(i * i for i in range(10))
-        assert result2 == expected2
+        state.shutdown()
+
+
+class TestWorkerAutostart:
+    """Автозапуск воркеров через Application.startup()."""
+
+    def test_startup_autostart_workers(self):
+        """startup() автоматически запускает воркеров по числу ядер."""
+        import os
+        state = Application(modules_dir="modules")
+        state.startup()
+
+        wm = state.worker_manager
+        ids = wm.get_worker_ids()
+        assert len(ids) == os.cpu_count()
+        assert all(isinstance(i, int) for i in ids)
 
         state.shutdown()
 
@@ -206,17 +217,20 @@ class TestHeartbeatMonitoring:
         state = Application(modules_dir="modules")
         state.startup()
 
+        # Запоминаем количество уже зарегистрированных воркеров
+        base_count = state.heartbeat_monitor.active_count
+
         # Регистрируем фейковый PID
         state.heartbeat_monitor.register(12345)
-        assert state.heartbeat_monitor.active_count == 1
+        assert state.heartbeat_monitor.active_count == base_count + 1
 
         # Обновляем heartbeat
         state.heartbeat_monitor.update(12345)
-        assert state.heartbeat_monitor.active_count == 1
+        assert state.heartbeat_monitor.active_count == base_count + 1
 
         # Выегистрируем
         state.heartbeat_monitor.unregister(12345)
-        assert state.heartbeat_monitor.active_count == 0
+        assert state.heartbeat_monitor.active_count == base_count
 
         state.shutdown()
 
@@ -226,7 +240,7 @@ class TestMetricsUpdated:
 
     def test_metrics_infrastructure_works(self):
         """Метрики Prometheus — инфраструктура работает корректно."""
-        from metrics import (
+        from monitoring.metrics import (
             api_calls_total,
             api_duration_seconds,
             processpool_active,
@@ -257,7 +271,7 @@ class TestMetricsUpdated:
 
     def test_metrics_labels_correct(self):
         """Метрики имеют правильные labels."""
-        from metrics import api_calls_total
+        from monitoring.metrics import api_calls_total
 
         # Проверяем что labels правильные
         counter = api_calls_total.labels(

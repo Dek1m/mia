@@ -5,9 +5,9 @@ import threading
 from typing import Any
 
 from argenta_logging import get_logger
-from interfaces import IModuleRegistry
-from module_base import ModuleBase
-from module_manager import ModuleManager
+from core.interfaces import IModuleRegistry
+from modules_system.module_base import ModuleBase
+from modules_system.module_manager import ModuleManager
 
 log = get_logger(__name__)
 

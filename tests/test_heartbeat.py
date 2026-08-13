@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from heartbeat_monitor import HeartbeatMonitor
+from monitoring.heartbeat_monitor import HeartbeatMonitor
 
 
 # === Фикстуры ===

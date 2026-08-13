@@ -5,8 +5,8 @@ from concurrent.futures import Future
 
 import pytest
 
-from thread_pool import ThreadPoolManager
-from metrics import threadpool_active
+from pools.thread_pool import ThreadPoolManager
+from monitoring.metrics import threadpool_active
 
 
 @pytest.fixture

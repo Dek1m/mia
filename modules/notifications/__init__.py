@@ -1,5 +1,5 @@
 """Модуль уведомлений — пример использования EventBus."""
-from module_base import ModuleBase
+from modules_system.module_base import ModuleBase
 
 
 class NotificationsModule(ModuleBase):

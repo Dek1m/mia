@@ -1,7 +1,7 @@
 """Unit-тесты для Serializer."""
 import pytest
 
-from serializer import Serializer
+from storage.serializer import Serializer
 
 
 # === Базовые тесты ===

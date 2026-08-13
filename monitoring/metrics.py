@@ -11,6 +11,9 @@
   - heartbeat_  — HeartbeatMonitor
   - module_     — ModuleManager (загрузка модулей)
   - memory_     — SharedMemoryManager
+  - cpu_        — CpuMetricsCollector, CpuAffinityProvider
+  - loadbalancer_ — LoadBalancer
+  - worker_manager_ — WorkerManager
 """
 from __future__ import annotations
 
@@ -125,6 +128,86 @@ memory_bytes_allocated = Gauge(
     "memory_bytes_allocated",
     "Total bytes allocated in shared memory",
     ["segment"],
+)
+
+
+# ============================================================
+# CPU Metrics — сбор метрик CPU
+# ============================================================
+
+cpu_load_gauge = Gauge(
+    "cpu_load_gauge",
+    "Overall CPU load (0.0 - 1.0)",
+)
+
+cpu_per_core_load_gauge = Gauge(
+    "cpu_per_core_load_gauge",
+    "Per-core CPU load (0.0 - 1.0)",
+    ["core"],
+)
+
+
+# ============================================================
+# Load Balancer — балансировка нагрузки
+# ============================================================
+
+loadbalancer_score_histogram = Histogram(
+    "loadbalancer_score_histogram",
+    "Worker selection score distribution",
+    buckets=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+)
+
+loadbalancer_selections_total = Counter(
+    "loadbalancer_selections_total",
+    "Total worker selections",
+    ["worker_id"],
+)
+
+loadbalancer_no_worker_total = Counter(
+    "loadbalancer_no_worker_total",
+    "Total selections with no available worker",
+)
+
+
+# ============================================================
+# Worker Manager — управление воркерами
+# ============================================================
+
+worker_manager_active = Gauge(
+    "worker_manager_active",
+    "Active workers managed by WorkerManager",
+)
+
+worker_manager_restarts_total = Counter(
+    "worker_manager_restarts_total",
+    "Total worker restarts",
+)
+
+worker_manager_tasks_submitted_total = Counter(
+    "worker_manager_tasks_submitted_total",
+    "Total tasks submitted through WorkerManager",
+    ["status"],
+)
+
+worker_manager_task_duration_seconds = Histogram(
+    "worker_manager_task_duration_seconds",
+    "Task execution duration in WorkerManager",
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
+)
+
+
+# ============================================================
+# CPU Affinity — привязка к ядрам
+# ============================================================
+
+cpu_affinity_set_total = Counter(
+    "cpu_affinity_set_total",
+    "Total successful CPU affinity bindings",
+)
+
+cpu_affinity_errors_total = Counter(
+    "cpu_affinity_errors_total",
+    "Total CPU affinity binding errors",
 )
 
 

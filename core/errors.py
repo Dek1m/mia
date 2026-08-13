@@ -18,10 +18,6 @@ class ModuleLoadError(ModuleError):
     """Ошибка загрузки модуля."""
 
 
-class ProcessPoolError(MiaError):
-    """Ошибка пула процессов."""
-
-
 class CircuitOpenError(MiaError):
     """Circuit breaker открыт."""
 

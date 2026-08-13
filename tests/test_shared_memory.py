@@ -3,7 +3,7 @@ import multiprocessing.shared_memory as shm
 
 import pytest
 
-from shared_memory import SharedMemoryManager
+from storage.shared_memory import SharedMemoryManager
 
 
 # === Фикстуры ===

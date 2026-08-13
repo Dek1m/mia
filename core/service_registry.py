@@ -5,7 +5,7 @@ import threading
 from typing import Any
 
 from argenta_logging import get_logger
-from interfaces import IServiceProvider
+from core.interfaces import IServiceProvider
 
 log = get_logger(__name__)
 

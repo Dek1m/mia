@@ -5,7 +5,7 @@ from typing import Any, Callable
 
 from argenta_logging import get_logger
 
-from metrics import threadpool_active
+from monitoring.metrics import threadpool_active
 
 log = get_logger(__name__)
 

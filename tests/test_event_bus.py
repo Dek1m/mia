@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import patch
 
-from event_bus import EventBus
+from communication.event_bus import EventBus
 
 
 class TestEventBusCreation:
@@ -19,7 +19,7 @@ class TestEventBusCreation:
 class TestSubscribeAndPublish:
     """Тесты подписки и публикации."""
 
-    @patch("event_bus.log")
+    @patch("communication.event_bus.log")
     def test_subscribe_and_publish(self, _mock_log):
         """Подписка на событие + публикация — handler вызывается."""
         bus = EventBus()
@@ -33,7 +33,7 @@ class TestSubscribeAndPublish:
 
         assert calls == ["hello"]
 
-    @patch("event_bus.log")
+    @patch("communication.event_bus.log")
     def test_publish_with_none_data(self, _mock_log):
         """Публикация без data — handler получает None."""
         bus = EventBus()
@@ -47,7 +47,7 @@ class TestSubscribeAndPublish:
 
         assert calls == [None]
 
-    @patch("event_bus.log")
+    @patch("communication.event_bus.log")
     def test_publish_with_complex_data(self, _mock_log):
         """Публикация со сложным объектом."""
         bus = EventBus()
@@ -66,7 +66,7 @@ class TestSubscribeAndPublish:
 class TestMultipleSubscribers:
     """Тесты нескольких подписчиков."""
 
-    @patch("event_bus.log")
+    @patch("communication.event_bus.log")
     def test_multiple_subscribers(self, _mock_log):
         """Несколько подписчиков на одно событие — все вызываются."""
         bus = EventBus()
@@ -89,7 +89,7 @@ class TestMultipleSubscribers:
 
         assert calls == [("h1", "test"), ("h2", "test"), ("h3", "test")]
 
-    @patch("event_bus.log")
+    @patch("communication.event_bus.log")
     def test_subscribers_called_in_order(self, _mock_log):
         """Подписчики вызываются в порядке подписки."""
         bus = EventBus()
@@ -112,7 +112,7 @@ class TestMultipleSubscribers:
 class TestUnsubscribe:
     """Тесты отписки."""
 
-    @patch("event_bus.log")
+    @patch("communication.event_bus.log")
     def test_unsubscribe(self, _mock_log):
         """Отписка от события — handler больше не вызывается."""
         bus = EventBus()
@@ -127,7 +127,7 @@ class TestUnsubscribe:
 
         assert calls == []
 
-    @patch("event_bus.log")
+    @patch("communication.event_bus.log")
     def test_unsubscribe_only_target(self, _mock_log):
         """Отписка убирает только нужный handler, остальные остаются."""
         bus = EventBus()
@@ -147,7 +147,7 @@ class TestUnsubscribe:
 
         assert calls == ["h2"]
 
-    @patch("event_bus.log")
+    @patch("communication.event_bus.log")
     def test_unsubscribe_nonexistent_event(self, _mock_log):
         """Отписка от несуществующего события — не ошибка."""
         bus = EventBus()
@@ -158,7 +158,7 @@ class TestUnsubscribe:
         # Не должно выбросить исключение
         bus.unsubscribe("ghost.event", handler)
 
-    @patch("event_bus.log")
+    @patch("communication.event_bus.log")
     def test_unsubscribe_nonexistent_handler(self, _mock_log):
         """Отписка handler'а который не был подписан — не ошибка."""
         bus = EventBus()
@@ -177,14 +177,14 @@ class TestUnsubscribe:
 class TestPublishNoSubscribers:
     """Тесты публикации без подписчиков."""
 
-    @patch("event_bus.log")
+    @patch("communication.event_bus.log")
     def test_publish_no_subscribers(self, _mock_log):
         """Публикация события без подписчиков — без ошибки."""
         bus = EventBus()
         # Не должно выбросить исключение
         bus.publish("no.subscribers", data="test")
 
-    @patch("event_bus.log")
+    @patch("communication.event_bus.log")
     def test_publish_different_event(self, _mock_log):
         """Публикация события когда подписаны на другое — handler не вызывается."""
         bus = EventBus()
@@ -202,7 +202,7 @@ class TestPublishNoSubscribers:
 class TestHandlerError:
     """Тесты обработки ошибок в handler."""
 
-    @patch("event_bus.log")
+    @patch("communication.event_bus.log")
     def test_handler_error(self, _mock_log):
         """Ошибка в handler не ломает других подписчиков."""
         bus = EventBus()
@@ -227,7 +227,7 @@ class TestHandlerError:
 class TestClear:
     """Тесты очистки подписчиков."""
 
-    @patch("event_bus.log")
+    @patch("communication.event_bus.log")
     def test_clear(self, _mock_log):
         """Очистка всех подписчиков."""
         bus = EventBus()
@@ -249,13 +249,13 @@ class TestClear:
 
         assert calls == []
 
-    @patch("event_bus.log")
+    @patch("communication.event_bus.log")
     def test_clear_empty_bus(self, _mock_log):
         """Очистка пустой шины — не ошибка."""
         bus = EventBus()
         bus.clear()  # Не должно выбросить исключение
 
-    @patch("event_bus.log")
+    @patch("communication.event_bus.log")
     def test_subscribe_after_clear(self, _mock_log):
         """Подписка после очистки работает корректно."""
         bus = EventBus()

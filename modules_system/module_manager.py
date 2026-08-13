@@ -11,7 +11,7 @@ from typing import Any
 
 from argenta_logging import get_logger
 
-from module_base import ModuleBase
+from modules_system.module_base import ModuleBase
 
 log = get_logger(__name__)
 

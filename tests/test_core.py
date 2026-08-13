@@ -1,9 +1,9 @@
 """Unit-тесты для core компонентов: State, ModuleManager, ModuleBase."""
 import pytest
-from application import Application
-from module_base import ModuleBase, api_method
+from core.application import Application
+from modules_system.module_base import ModuleBase, api_method
 from modules.sample import SampleModule
-from errors import ModuleLoadError
+from core.errors import ModuleLoadError
 
 
 def test_state_creation():

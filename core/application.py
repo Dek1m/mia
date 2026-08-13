@@ -8,20 +8,22 @@ from __future__ import annotations
 import threading
 from typing import Any
 from argenta_logging import get_logger
-from interfaces import (
-    ICache, IThreadPool, IProcessPool, IEventBus,
+from core.interfaces import (
+    ICache, IThreadPool, IEventBus,
     IHeartbeatMonitor, IModuleRegistry, IServiceProvider,
+    ICpuMetricsCollector, ILoadBalancer, IWorkerManager,
 )
-from cache_interface import NullCache
-from service_registry import ServiceRegistry
-from module_registry import ModuleRegistry
-from api_proxy import ApiProxy
-from factories import (
+from storage.cache_interface import NullCache
+from core.service_registry import ServiceRegistry
+from modules_system.module_registry import ModuleRegistry
+from communication.api_proxy import ApiProxy
+from core.factories import (
     CacheFactory, ThreadPoolFactory,
     EventBusFactory, HeartbeatFactory,
+    CpuMetricsCollectorFactory, LoadBalancerFactory, WorkerManagerFactory,
 )
-from shutdown_manager import ShutdownManager
-from errors import ModuleLoadError
+from resilience.shutdown_manager import ShutdownManager
+from core.errors import ModuleLoadError
 
 log = get_logger(__name__)
 
@@ -67,6 +69,21 @@ class Application:
         heartbeat = HeartbeatFactory.create()
         self._services.register(IHeartbeatMonitor, heartbeat)
 
+        # CPU Metrics Collector
+        cpu_metrics = CpuMetricsCollectorFactory.create()
+        self._services.register(ICpuMetricsCollector, cpu_metrics)
+
+        # Load Balancer
+        load_balancer = LoadBalancerFactory.create()
+        self._services.register(ILoadBalancer, load_balancer)
+
+        # Worker Manager
+        worker_manager = WorkerManagerFactory.create(
+            load_balancer=load_balancer,
+            heartbeat_monitor=heartbeat,
+        )
+        self._services.register(IWorkerManager, worker_manager)
+
         # Module Registry
         module_registry = ModuleRegistry(modules_dir, allowed_modules)
         self._services.register(IModuleRegistry, module_registry)
@@ -76,9 +93,6 @@ class Application:
 
         # Shutdown Manager
         self._shutdown_manager = ShutdownManager()
-
-        # Process Pool (lazy)
-        self._process_pool: IProcessPool | None = None
 
         log.info("Application created", extra={"modules_dir": modules_dir})
 
@@ -125,15 +139,19 @@ class Application:
         return self._services.resolve(IModuleRegistry)._modules
 
     @property
-    def process_pool(self) -> IProcessPool | None:
-        """Доступ к пулу процессов."""
-        return self._process_pool
+    def worker_manager(self) -> IWorkerManager:
+        """Доступ к менеджеру воркеров."""
+        return self._services.resolve(IWorkerManager)
 
     @property
-    def cpu_affinity(self) -> Any:
-        """Доступ к провайдеру CPU affinity."""
-        from cpu_affinity import CpuAffinityProvider
-        return CpuAffinityProvider()
+    def cpu_metrics(self) -> ICpuMetricsCollector:
+        """Доступ к метрикам CPU."""
+        return self._services.resolve(ICpuMetricsCollector)
+
+    @property
+    def load_balancer(self) -> ILoadBalancer:
+        """Доступ к балансировщику."""
+        return self._services.resolve(ILoadBalancer)
 
     @property
     def services(self) -> IServiceProvider:
@@ -143,18 +161,26 @@ class Application:
     # === Lifecycle ===
 
     def startup(self) -> None:
-        """Инициализация: запуск потоков, heartbeat."""
+        """Инициализация: запуск потоков, heartbeat, CPU metrics, ВОРКЕРОВ."""
         self._services.resolve(IThreadPool).start()
         self._services.resolve(IHeartbeatMonitor).start()
+        self._services.resolve(ICpuMetricsCollector).start()
+
+        # АВТОЗАПУСК ВОРКЕРОВ — по числу ядер CPU
+        worker_manager = self._services.resolve(IWorkerManager)
+        worker_manager.start()
+
         log.info("Application startup complete")
 
     def shutdown(self) -> None:
         """Корректное завершение."""
         log.info("Application shutting down")
 
-        if self._process_pool is not None:
-            self._process_pool.shutdown()
-            self._process_pool = None
+        # Остановить CPU metrics
+        self._services.resolve(ICpuMetricsCollector).stop()
+
+        # Остановить воркеров
+        self._services.resolve(IWorkerManager).stop()
 
         self._services.resolve(IHeartbeatMonitor).stop()
         self._services.resolve(IThreadPool).shutdown()
@@ -200,34 +226,6 @@ class Application:
             log.info("Module unloaded", extra={"module_name": name})
         except Exception as e:
             log.error("Failed to unload module", extra={"module_name": name, "error": str(e)})
-
-    # === Process Pool ===
-
-    def create_process_pool(self, num_processes: int | None = None) -> IProcessPool:
-        """Создать пул процессов."""
-        with self._lock:
-            if self._process_pool is not None:
-                return self._process_pool
-
-            from process_pool import ProcessPool
-            from cpu_affinity import CpuAffinityProvider
-
-            affinity = CpuAffinityProvider()
-            heartbeat = self._services.resolve(IHeartbeatMonitor)
-
-            def _on_process_died(pid: int) -> None:
-                self._services.resolve(IEventBus).publish("process.died", {"pid": pid})
-
-            heartbeat.set_timeout_handler(_on_process_died)
-
-            self._process_pool = ProcessPool(
-                num_processes=num_processes,
-                affinity_provider=affinity,
-                heartbeat_monitor=heartbeat,
-            )
-            self._process_pool.start()
-            log.info("ProcessPool created", extra={"num_processes": num_processes})
-            return self._process_pool
 
     # === Cache ===
 

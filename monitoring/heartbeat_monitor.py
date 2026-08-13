@@ -4,7 +4,7 @@ import threading
 import time
 from typing import Callable
 from argenta_logging import get_logger
-from metrics import heartbeat_missed_total
+from monitoring.metrics import heartbeat_missed_total
 
 log = get_logger(__name__)
 

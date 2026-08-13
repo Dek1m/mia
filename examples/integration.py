@@ -6,7 +6,7 @@
 - ApiProxy: state.api.module.method()
 - EventBus: pub/sub коммуникация между модулями
 - ThreadPool: @api_method(parallel=True) и прямые submit
-- ProcessPool: multiprocessing dispatching с fault tolerance
+- WorkerManager: multiprocessing dispatching с fault tolerance
 - Heartbeat: мониторинг процессов
 - Metrics: метрики обновляются
 """
@@ -16,11 +16,11 @@ import os
 # Корень проекта — в sys.path для импортов
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from application import Application
+from core.application import Application
 
 
 def heavy_task(n: int) -> int:
-    """Функция для ProcessPool — должна быть на верхнем уровне (picklable)."""
+    """Функция для WorkerManager — должна быть на верхнем уровне (picklable)."""
     return sum(i * i for i in range(n))
 
 
@@ -84,18 +84,16 @@ def main() -> None:
     print(f"    sample.heavy_computation([1..5]) = {parallel_result}")
     assert parallel_result == 15
 
-    # ── 6. ProcessPool: multiprocessing dispatching ────────────
-    print("\n[6] ProcessPool — multiprocessing...")
-    pool = state.create_process_pool(num_processes=2)
-    print(f"    ProcessPool создан: {pool is not None}")
-    print(f"    Активных процессов: {state.process_pool._num_processes}")
+    # ── 6. WorkerManager: multiprocessing dispatching ──────────
+    print("\n[6] WorkerManager — multiprocessing...")
+    wm = state.worker_manager
+    print(f"    WorkerManager создан: {wm is not None}")
 
-    proc_result = state.process_pool.submit(heavy_task, 100)
+    proc_result = wm.submit(heavy_task, 100)
     print(f"    heavy_task(100) = {proc_result}")
     assert proc_result == sum(i * i for i in range(100))
 
-    # Повторный submit
-    proc_result2 = state.process_pool.submit(heavy_task, 10)
+    proc_result2 = wm.submit(heavy_task, 10)
     print(f"    heavy_task(10) = {proc_result2}")
     assert proc_result2 == sum(i * i for i in range(10))
 
@@ -135,7 +133,7 @@ def main() -> None:
     print("    Все модули выгружены")
     print("    ThreadPool остановлен")
     print("    Heartbeat остановлен")
-    print("    ProcessPool остановлен")
+    print("    WorkerManager остановлен")
 
     print("\n" + "=" * 60)
     print("ВСЕ КОМПОНЕНТЫ РАБОТАЮТ ВМЕСТЕ ✓")

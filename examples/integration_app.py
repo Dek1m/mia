@@ -2,7 +2,7 @@
 
 Запуск: python examples/integration_app.py
 """
-from application import Application
+from core.application import Application
 
 
 def main() -> None:

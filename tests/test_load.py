@@ -9,16 +9,16 @@ import pytest
 # Корень проекта — в sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from application import Application
-from module_base import ModuleBase, api_method
-from event_bus import EventBus
+from core.application import Application
+from modules_system.module_base import ModuleBase, api_method
+from communication.event_bus import EventBus
 
 
 # ── Вспомогательные функции ────────────────────────────────────────
 
 
 def cpu_task(n: int) -> int:
-    """CPU-bound задача для ProcessPool."""
+    """CPU-bound задача для WorkerManager."""
     return sum(i * i for i in range(n))
 
 
@@ -121,24 +121,24 @@ class TestThreadPoolThroughput:
         state.shutdown()
 
 
-class TestProcessPoolThroughput:
-    """50 задач в ProcessPool за < 5 секунд."""
+class TestWorkerManagerThroughput:
+    """50 задач в WorkerManager за < 5 секунд."""
 
-    def test_process_pool_throughput(self):
-        """50 задач отправлены в ProcessPool и завершены."""
+    def test_worker_manager_throughput(self):
+        """50 задач отправлены в WorkerManager и завершены."""
         state = Application(modules_dir="modules")
         state.startup()
 
-        pool = state.create_process_pool(num_processes=2)
+        wm = state.worker_manager
 
         start = time.time()
         results = []
         for i in range(50):
-            r = pool.submit(cpu_task, 100)
+            r = wm.submit(cpu_task, 100)
             results.append(r)
         elapsed = time.time() - start
 
-        print(f"\n50 process tasks: {elapsed:.3f}s")
+        print(f"\n50 worker tasks: {elapsed:.3f}s")
         assert len(results) == 50
         for r in results:
             assert r == sum(j * j for j in range(100))

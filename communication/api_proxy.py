@@ -3,10 +3,10 @@ from typing import Any, Callable, TYPE_CHECKING
 import time
 
 from argenta_logging import get_logger
-from metrics import api_calls_total, api_duration_seconds
+from monitoring.metrics import api_calls_total, api_duration_seconds
 
 if TYPE_CHECKING:
-    from thread_pool import ThreadPoolManager
+    from pools.thread_pool import ThreadPoolManager
 
 log = get_logger(__name__)
 

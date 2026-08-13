@@ -2,8 +2,8 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from api_proxy import ApiProxy, ModuleApiProxy, ApiMethodProxy
-from module_base import ModuleBase, api_method
+from communication.api_proxy import ApiProxy, ModuleApiProxy, ApiMethodProxy
+from modules_system.module_base import ModuleBase, api_method
 from modules.sample import SampleModule
 
 
@@ -120,7 +120,7 @@ class TestUnregisterModule:
 class TestApiCallLogs:
     """Тесты логирования API вызовов."""
 
-    @patch("api_proxy.log")
+    @patch("communication.api_proxy.log")
     def test_api_call_logs(self, mock_log):
         """Проверка что вызов API метода логируется."""
         proxy = ApiProxy()
@@ -140,7 +140,7 @@ class TestApiCallLogs:
         assert extra["method_name"] == "add"
         assert extra["args_len"] == 2
 
-    @patch("api_proxy.log")
+    @patch("communication.api_proxy.log")
     def test_register_logs(self, mock_log):
         """Проверка что регистрация модуля логируется."""
         proxy = ApiProxy()
@@ -153,7 +153,7 @@ class TestApiCallLogs:
         assert call_kwargs[0][0] == "Module registered in ApiProxy"
         assert call_kwargs[1]["extra"]["module_name"] == "sample"
 
-    @patch("api_proxy.log")
+    @patch("communication.api_proxy.log")
     def test_unregister_logs(self, mock_log):
         """Проверка что удаление модуля логируется."""
         proxy = ApiProxy()

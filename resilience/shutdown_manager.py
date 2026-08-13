@@ -5,7 +5,7 @@ import signal
 import threading
 from typing import Callable, Any
 from argenta_logging import get_logger
-from interfaces import IShutdownManager
+from core.interfaces import IShutdownManager
 
 log = get_logger(__name__)
 

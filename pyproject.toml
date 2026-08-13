@@ -16,7 +16,20 @@ metrics = ["prometheus-client>=0.20.0"]
 dev = ["pytest>=7.0", "prometheus-client>=0.20.0"]
 
 [tool.setuptools]
-py-modules = ["state", "module_base", "module_manager", "api_proxy", "api_registry", "event_bus", "thread_pool", "process_pool", "cpu_affinity", "heartbeat_monitor", "shared_memory", "serializer", "logger", "metrics", "errors"]
+py-modules = [
+    "core.interfaces", "core.errors", "core.application", "core.factories",
+    "core.service_registry",
+    "modules_system.module_base", "modules_system.module_manager",
+    "modules_system.module_registry",
+    "pools.thread_pool", "pools.process_pool", "pools.cpu_affinity",
+    "pools.cpu_metrics", "pools.load_balancer", "pools.worker_manager",
+    "monitoring.heartbeat_monitor", "monitoring.health_check",
+    "monitoring.metrics", "monitoring.metrics_collector",
+    "resilience.retry", "resilience.retry_policy", "resilience.circuit_breaker",
+    "resilience.graceful_shutdown", "resilience.shutdown_manager",
+    "storage.shared_memory", "storage.serializer", "storage.cache_interface", "storage.logging_config",
+    "communication.event_bus", "communication.api_proxy",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -58,7 +58,7 @@ def _run_hooks() -> None:
                 "Shutdown hook timed out",
                 extra={"hook": hook.__name__, "timeout": _default_timeout},
             )
-            from errors import ShutdownTimeoutError
+            from core.errors import ShutdownTimeoutError
 
             raise ShutdownTimeoutError(f"Hook '{hook.__name__}' timed out after {_default_timeout}s")
 

@@ -6,7 +6,7 @@ import pytest
 
 from prometheus_client import Counter, Gauge, Histogram
 
-from metrics import (
+from monitoring.metrics import (
     # State
     state_module_loads_total,
     state_shutdowns_total,

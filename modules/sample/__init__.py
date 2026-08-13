@@ -1,5 +1,5 @@
 """Тестовый модуль — пример использования."""
-from module_base import ModuleBase, api_method
+from modules_system.module_base import ModuleBase, api_method
 
 class SampleModule(ModuleBase):
     @property

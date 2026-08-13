@@ -77,7 +77,7 @@ class CircuitBreaker:
         """
         current_state = self.state
         if current_state == State.OPEN:
-            from errors import CircuitOpenError
+            from core.errors import CircuitOpenError
 
             raise CircuitOpenError("Circuit breaker is OPEN")
 

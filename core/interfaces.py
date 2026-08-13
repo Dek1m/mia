@@ -41,19 +41,6 @@ class IThreadPool(ABC):
     def shutdown(self, wait: bool = True) -> None: ...
 
 
-class IProcessPool(ABC):
-    """Пул процессов."""
-
-    @abstractmethod
-    def start(self) -> None: ...
-
-    @abstractmethod
-    def submit(self, fn: Callable, *args: Any, timeout: float | None = None, **kwargs: Any) -> Any: ...
-
-    @abstractmethod
-    def shutdown(self, timeout: float = 5.0) -> None: ...
-
-
 class IEventBus(ABC):
     """Шина событий."""
 
@@ -129,3 +116,45 @@ class IShutdownManager(ABC):
 
     @abstractmethod
     def shutdown(self, timeout: float = 30.0) -> None: ...
+
+
+class ICpuMetricsCollector(ABC):
+    """Сбор метрик CPU."""
+
+    @abstractmethod
+    def get_cpu_load(self) -> float: ...
+
+    @abstractmethod
+    def get_per_core_load(self) -> list[float]: ...
+
+    @abstractmethod
+    def start(self) -> None: ...
+
+    @abstractmethod
+    def stop(self) -> None: ...
+
+
+class ILoadBalancer(ABC):
+    """Балансировщик нагрузки."""
+
+    @abstractmethod
+    def select_worker(self, workers: dict[int, Any]) -> int | None: ...
+
+    @abstractmethod
+    def update_worker_state(self, worker_id: int, state: Any) -> None: ...
+
+
+class IWorkerManager(ABC):
+    """Управление lifecycle воркеров."""
+
+    @abstractmethod
+    def start(self, num_workers: int | None = None) -> None: ...
+
+    @abstractmethod
+    def stop(self, timeout: float = 5.0) -> None: ...
+
+    @abstractmethod
+    def restart_worker(self, worker_id: int) -> None: ...
+
+    @abstractmethod
+    def get_worker_ids(self) -> list[int]: ...
