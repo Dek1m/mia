@@ -1,6 +1,6 @@
-# План: Доработка модуля db + Создание модуля auth
+# План: Доработка ядра mia + модуля db + модуля auth
 
-**Цель:** Реализовать Schema-first архитектуру с автосозданием БД/таблиц, Table Gateway и метаданными модулей.
+**Цель:** Реализовать Schema-first архитектуру с автосозданием БД/таблиц, Table Gateway, метаданными модулей и авторегистрацией в State.
 
 ---
 
@@ -14,6 +14,98 @@
 6. **Обязательный UUID primary key** — автоматически если нет
 7. **Метаданные модулей** — хэш, описание, методы для --help
 8. **Авторегистрация в State** — `state.mail`, `state.auth`
+
+---
+
+## Часть 0: Доработка ядра mia
+
+### Шаг 0.1: ModuleMetadata — система метаданных
+
+- **Файл:** `modules_system/module_metadata.py` (создаём)
+- **Что:**
+  - Класс `ModuleMetadata` для хранения метаданных модуля
+  - Поля:
+    - `hash` — хэш модуля (SHA256 от исходного кода)
+    - `state_class_name` — имя класса в State (например, "Mail" → state.mail)
+    - `main_class` — имя основного класса (например, "MailProvider")
+    - `methods` — dict с описаниями методов (для --help)
+    - `description` — описание модуля из docstring
+    - `version` — версия модуля
+    - `dependencies` — список зависимостей
+  - Метод `compute_hash(module_class)` — вычисление хэша
+- **Тест:** `tests/test_module_metadata.py`
+
+### Шаг 0.2: Module Registry — реестр модулей
+
+- **Файл:** `modules_system/module_registry.py` (обновляем)
+- **Что:**
+  - Добавляем хранение метаданных для каждого модуля
+  - `register(name, module, metadata)` — регистрация с метаданными
+  - `get_metadata(name)` — получение метаданных
+  - `get_hash(name)` — получение хэша
+  - `list_all()` — список всех модулей с метаданными
+- **Тест:** `tests/test_module_registry.py`
+
+### Шаг 0.3: Автоматическая регистрация в State
+
+- **Файл:** `core/application.py` (изменяем)
+- **Что:**
+  - При загрузке модуля проверяем `STATE_CLASS_NAME`
+  - Если есть — создаём базовый класс dynamically:
+    ```python
+    if hasattr(module, 'STATE_CLASS_NAME'):
+        class_name = module.STATE_CLASS_NAME
+        base_class = type(class_name, (), {
+            '__doc__': module.__doc__,
+            '_module': module,
+            '_provider': None,
+        })
+        setattr(state, class_name.lower(), base_class())
+    ```
+  - Регистрируем провайдер: `state.{class_name.lower()}._provider = provider`
+- **Тест:** `tests/test_auto_registration.py`
+
+### Шаг 0.4: State с поддержкой динамических атрибутов
+
+- **Файл:** `core/state.py` (создаём или обновляем)
+- **Что:**
+  - Класс `State` с поддержкой `__getattr__`
+  - Хранит зарегистрированные модули
+  - `__getattr__(name)` → возвращает экземпляр модуля илиraises AttributeError
+  - `register_module(name, instance)` — регистрация модуля
+  - `modules` — реестр всех модулей
+- **Тест:** `tests/test_state.py`
+
+### Шаг 0.5: Генерация --help
+
+- **Файл:** `modules_system/help_generator.py` (создаём)
+- **Что:**
+  - Функция `generate_help(module)` → строка help
+  - Парсит docstring модуля и методов
+  - Форматирует вывод:
+    ```
+    Module: MailModule
+    Version: 1.0.0
+    
+    Модуль почты для Mia Framework.
+    
+    Methods:
+      send — Отправить письмо.
+      get_inbox — Получить входящие.
+    ```
+  - Функция `generate_help_all()` — help для всех модулей
+- **Тест:** `tests/test_help_generator.py`
+
+### Шаг 0.6: Интеграция с Application.startup
+
+- **Файл:** `core/application.py` (изменяем)
+- **Что:**
+  - В `startup()` добавляем этап «пост-загрузка модулей»
+  - После загрузки всех модулей:
+    1. Проверяем хэши
+    2. Автоматически регистрируем в State
+    3. Генерируем --help если нужно
+- **Тест:** `tests/test_application_startup.py`
 
 ---
 
@@ -256,17 +348,34 @@
 
 | Часть | Шаги | Сложность | Оценка |
 |-------|------|-----------|--------|
+| 0. ядро mia | 0.1-0.6 | высокая | 3 дня |
 | 1. db доработка | 1.1-1.7 | высокая | 4 дня |
 | 2. auth модуль | 2.1-2.4 | средняя | 2 дня |
-| 3. Метаданные модулей | 3.1-3.3 | средняя | 1.5 дня |
-| 4. Интеграция | 4.1-4.2 | средняя | 1 день |
-| **Итого** | | | **8.5 дней** |
+| 3. Интеграция | 3.1-3.2 | средняя | 1 день |
+| **Итого** | | | **10 дней** |
 
 ---
 
 ## Структура файлов
 
 ```
+core/
+├── application.py       (обновлён — пост-загрузка модулей)
+├── state.py             (НОВЫЙ или обновлён — динамические атрибуты)
+├── database.py          (обновлён — register_schema, __getattr__)
+└── factories.py         (обновлён)
+
+modules_system/
+├── module_base.py       (без изменений)
+├── module_registry.py   (обновлён — хранение метаданных)
+├── module_metadata.py   (НОВЫЙ — ModuleMetadata)
+├── help_generator.py    (НОВЫЙ — генерация --help)
+└── tests/
+    ├── test_module_metadata.py
+    ├── test_help_generator.py
+    ├── test_auto_registration.py
+    └── test_state.py
+
 modules/db/
 ├── __init__.py
 ├── provider.py          (обновлён — register_schema, __getattr__)
@@ -293,13 +402,6 @@ modules/auth/
 └── tests/
     └── test_auth.py
 
-modules_system/
-├── module_metadata.py   (НОВЫЙ — ModuleMetadata)
-├── help_generator.py    (НОВЫЙ — генерация --help)
-└── tests/
-    ├── test_module_metadata.py
-    └── test_help_generator.py
-
-core/
-└── application.py       (обновлён — автоегистрация в State)
+tests/
+└── test_schema_first_e2e.py (НОВЫЙ — интеграционные тесты)
 ```
