@@ -1,117 +1,210 @@
-# План: Доработка ядра mia + модуля db + модуля auth
+# План: Schema-first архитектура для mia
 
-**Цель:** Реализовать Schema-first архитектуру с автосозданием БД/таблиц, Table Gateway, метаданными модулей и авторегистрацией в State.
-
----
-
-## Ключевые фичи
-
-1. **Schema-first** — модули предоставляют схемы, db создаёт таблицы
-2. **Table Gateway** — доступ к таблицам как к классам (`state.db.mail.outbound.insert(...)`)
-3. **Автосоздание** — CREATE DATABASE/TABLE IF NOT EXISTS
-4. **Строгий режим** — strict=True → ошибка если существует
-5. **Автоматическое определение типов** — по значению определяет SQL-тип
-6. **Обязательный UUID primary key** — автоматически если нет
-7. **Метаданные модулей** — хэш, описание, методы для --help
-8. **Авторегистрация в State** — `state.mail`, `state.auth`
+**Цель:** Реализовать Schema-first архитектуру с автосозданием БД/таблиц, Table Gateway, метаданными модулей.
 
 ---
 
-## Часть 0: Доработка ядра mia
+## ADR-001: Schema-first архитектура
 
-### Шаг 0.1: ModuleMetadata — система метаданных
+### Статус: Accepted
+
+### Контекст
+Модули mia (mail, auth, payments) должны определять свои таблицы БД. Нужен механизм:
+- Автосоздания таблиц при загрузке модуля
+- Удобного доступа к таблицам (`state.db.mail.outbound.insert(...)`)
+- Метаданных модулей (хэш, описание, --help)
+
+### Решение
+1. **Schema-first через dict** — модули определяют схемы как dict
+2. **TableGateway** — обёртка над DatabaseProvider для chaining API
+3. **Авторегистрация в State** — через `__getattr__` в Application
+
+### Почему dict, а не dataclass
+- Простота: не нужно писать конвертеры
+- Гибкость: можно генерировать схему динамически
+- JSON-совместимость: легко сериализовать
+
+---
+
+## Ключевые архитектурные решения
+
+### 1. State = Application + `__getattr__`
+
+**Application остаётся** как Composition Root + DI + Lifecycle.
+
+**State — это не отдельный класс.** Это `Application.__getattr__`, который делегирует доступ к модулям:
+
+```python
+# Внутри Application
+class Application:
+    def __getattr__(self, name: str) -> Any:
+        """state.mail → services.resolve(MailProvider)"""
+        # Ищем среди зарегистрированных модулей
+        registry = self.services.resolve(IModuleRegistry)
+        module = registry.get(name)
+        if module is not None:
+            return module
+        
+        # Ищем среди сервисов
+        try:
+            return self.services.resolve_by_name(name)
+        except:
+            raise AttributeError(f"Module '{name}' not loaded")
+```
+
+**Использование:**
+```python
+app = Application()
+app.startup()
+app.load_module("db")
+app.load_module("auth")
+app.load_module("mail")
+
+# Через app (Application)
+app.database  # IDatabase
+app.smart_dispatcher  # SmartDispatcher
+
+# Через app.state (Application как State)
+app.state.db  # DatabaseProvider
+app.state.mail  # MailProvider
+app.state.auth  # AuthProvider
+
+# chaining API
+app.state.db.mail.outbound.insert(to="user@test.com")
+```
+
+**Почему не отдельный класс State:**
+- Application уже является тем, что нужно (DI, lifecycle, доступ к сервисам)
+- Дублирование State и Application — лишняя абстракция
+- Через `__getattr__` получаем удобный API без дополнительных классов
+
+### 2. TableGateway как обёртка над DatabaseProvider
+
+**DatabaseProvider** — generic CRUD: `get()`, `insert()`, `update()`, `delete()`, `list()`, `count()`
+
+**TableGateway** — обёртка, добавляющая:
+- Chaining API: `db.mail.outbound.insert(...)`
+- Автотипизацию по схеме
+- Валидацию данных перед insert/update
+
+```
+TableGateway.insert(data)
+    ↓
+DatabaseProvider.insert("outbound", data)
+    ↓
+asyncpg pool
+```
+
+### 3. Schema-first через dict
+
+**Модуль определяет схему как dict при on_load:**
+
+```python
+class MailModule(ModuleBase):
+    def on_load(self, state):
+        schemas = {
+            "outbound": {
+                "columns": {
+                    "to": "TEXT NOT NULL",
+                    "subject": "TEXT NOT NULL",
+                    "body": "TEXT",
+                    "created_at": "TIMESTAMPTZ DEFAULT NOW()",
+                }
+            }
+        }
+        state.db.register_schema("mail", schemas)
+```
+
+**DatabaseProvider.register_schema() создаёт таблицы:**
+
+```python
+def register_schema(self, db_name, schemas, strict=False):
+    # 1. Создаём БД если нет
+    # 2. Для каждой таблицы: CREATE TABLE IF NOT EXISTS
+    # 3. Создаём DatabaseGateway для доступа
+    self._gateways[db_name] = DatabaseGateway(self, db_name)
+```
+
+### 4. Автоматическое определение типов
+
+```python
+def _infer_type(value):
+    if isinstance(value, str): return "TEXT"
+    if isinstance(value, int): return "INTEGER"
+    if isinstance(value, float): return "REAL"
+    if isinstance(value, bool): return "BOOLEAN"
+    if isinstance(value, datetime): return "TIMESTAMPTZ"
+    if isinstance(value, UUID): return "UUID"
+    if isinstance(value, dict): return "JSONB"
+    if isinstance(value, list): return "JSONB"
+    if isinstance(value, bytes): return "BYTEA"
+    return "TEXT"
+```
+
+### 5. Обязательный UUID primary key
+
+```python
+# Если в схеме нет primary key — автоматически добавляем id
+if not any(c.get('primary_key') for c in schema['columns'].values()):
+    schema['columns'] = {
+        'id': {'type': 'UUID', 'primary_key': True, 'default': 'gen_random_uuid()'},
+        **schema['columns']
+    }
+```
+
+---
+
+## Часть 1: Доработка ядра mia
+
+### Шаг 1.1: Метаданные модулей
 
 - **Файл:** `modules_system/module_metadata.py` (создаём)
 - **Что:**
-  - Класс `ModuleMetadata` для хранения метаданных модуля
-  - Поля:
-    - `hash` — хэш модуля (SHA256 от исходного кода)
-    - `state_class_name` — имя класса в State (например, "Mail" → state.mail)
-    - `main_class` — имя основного класса (например, "MailProvider")
-    - `methods` — dict с описаниями методов (для --help)
-    - `description` — описание модуля из docstring
-    - `version` — версия модуля
-    - `dependencies` — список зависимостей
+  - Класс `ModuleMetadata`
+  - Поля: `hash`, `state_class_name`, `main_class`, `methods`, `description`, `version`, `dependencies`
   - Метод `compute_hash(module_class)` — вычисление хэша
 - **Тест:** `tests/test_module_metadata.py`
 
-### Шаг 0.2: Module Registry — реестр модулей
+### Шаг 1.2: Module Registry — хранение метаданных
 
 - **Файл:** `modules_system/module_registry.py` (обновляем)
 - **Что:**
-  - Добавляем хранение метаданных для каждого модуля
   - `register(name, module, metadata)` — регистрация с метаданными
   - `get_metadata(name)` — получение метаданных
   - `get_hash(name)` — получение хэша
-  - `list_all()` — список всех модулей с метаданными
 - **Тест:** `tests/test_module_registry.py`
 
-### Шаг 0.3: Автоматическая регистрация в State
+### Шаг 1.3: Application.__getattr__ для доступа к модулям
 
 - **Файл:** `core/application.py` (изменяем)
 - **Что:**
-  - При загрузке модуля проверяем `STATE_CLASS_NAME`
-  - Если есть — создаём базовый класс dynamically:
-    ```python
-    if hasattr(module, 'STATE_CLASS_NAME'):
-        class_name = module.STATE_CLASS_NAME
-        base_class = type(class_name, (), {
-            '__doc__': module.__doc__,
-            '_module': module,
-            '_provider': None,
-        })
-        setattr(state, class_name.lower(), base_class())
-    ```
-  - Регистрируем провайдер: `state.{class_name.lower()}._provider = provider`
-- **Тест:** `tests/test_auto_registration.py`
+  - Добавляем `__getattr__(name)` → доступ к модулям как к атрибутам
+  - `app.state.mail` → `app.services.resolve(MailProvider)`
+  - `app.state.db` → `app.services.resolve(DatabaseProvider)`
+- **Тест:** `tests/test_application_getattr.py`
 
-### Шаг 0.4: State с поддержкой динамических атрибутов
-
-- **Файл:** `core/state.py` (создаём или обновляем)
-- **Что:**
-  - Класс `State` с поддержкой `__getattr__`
-  - Хранит зарегистрированные модули
-  - `__getattr__(name)` → возвращает экземпляр модуля илиraises AttributeError
-  - `register_module(name, instance)` — регистрация модуля
-  - `modules` — реестр всех модулей
-- **Тест:** `tests/test_state.py`
-
-### Шаг 0.5: Генерация --help
+### Шаг 1.4: Генерация --help
 
 - **Файл:** `modules_system/help_generator.py` (создаём)
 - **Что:**
   - Функция `generate_help(module)` → строка help
   - Парсит docstring модуля и методов
-  - Форматирует вывод:
-    ```
-    Module: MailModule
-    Version: 1.0.0
-    
-    Модуль почты для Mia Framework.
-    
-    Methods:
-      send — Отправить письмо.
-      get_inbox — Получить входящие.
-    ```
-  - Функция `generate_help_all()` — help для всех модулей
+  - Форматированный вывод
 - **Тест:** `tests/test_help_generator.py`
 
-### Шаг 0.6: Интеграция с Application.startup
+### Шаг 1.5: Интеграция с Application.startup
 
 - **Файл:** `core/application.py` (изменяем)
 - **Что:**
   - В `startup()` добавляем этап «пост-загрузка модулей»
-  - После загрузки всех модулей:
-    1. Проверяем хэши
-    2. Автоматически регистрируем в State
-    3. Генерируем --help если нужно
+  - После загрузки всех модулей: проверка хэшей, авторегистрация
 - **Тест:** `tests/test_application_startup.py`
 
 ---
 
-## Часть 1: Доработка модуля db
+## Часть 2: Доработка модуля db
 
-### Шаг 1.1: TableGateway — обёртка над таблицей
+### Шаг 2.1: TableGateway — обёртка над таблицей
 
 - **Файл:** `modules/db/gateway.py` (создаём)
 - **Что:**
@@ -127,7 +220,7 @@
 - **Обязательный UUID:** автоматически добавляет `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`
 - **Тест:** `tests/test_gateway.py`
 
-### Шаг 1.2: DatabaseGateway — обёртка над БД
+### Шаг 2.2: DatabaseGateway — обёртка над БД
 
 - **Файл:** `modules/db/gateway.py` (добавляем)
 - **Что:**
@@ -138,7 +231,7 @@
   - `drop_table(name)` — удаление таблицы
 - **Тест:** `tests/test_gateway.py`
 
-### Шаг 1.3: Schema Registry — реестр схем
+### Шаг 2.3: Schema Registry — реестр схем
 
 - **Файл:** `modules/db/schema_registry.py` (создаём)
 - **Что:**
@@ -147,57 +240,32 @@
   - `get(db_name, table_name)` — получение схемы
   - `all()` — все схемы
   - `unregister(db_name)` — удаление схемы модуля
-- **Валидация схемы:** проверка обязательных полей, типов
 - **Тест:** `tests/test_schema_registry.py`
 
-### Шаг 1.4: Migration Engine — движок миграций
-
-- **Файл:** `modules/db/migrations.py` (создаём)
-- **Что:**
-  - Класс `MigrationEngine` для CREATE/ALTER TABLE
-  - `create_database(db_name)` — CREATE DATABASE IF NOT EXISTS
-  - `drop_database(db_name)` — DROP DATABASE IF EXISTS
-  - `create_table(db_name, table_name, schema)` — CREATE TABLE IF NOT EXISTS
-  - `drop_table(db_name, table_name)` — DROP TABLE IF EXISTS
-  - `add_column(db_name, table_name, column, type)` — ALTER TABLE ADD COLUMN
-  - `drop_column(db_name, table_name, column)` — ALTER TABLE DROP COLUMN
-  - `alter_column(db_name, table_name, column, type)` — ALTER TABLE ALTER COLUMN
-  - `table_exists(db_name, table_name)` — проверка existence
-  - `database_exists(db_name)` — проверка existence
-- **Сравнение схем:** `diff(current, target)` → список миграций
-- **Тест:** `tests/test_migrations.py`
-
-### Шаг 1.5: Интеграция с DatabaseProvider
-
-- **Файл:** `modules/db/provider.py` (изменяем)
-- **Что:**
-  - `register_schema(db_name, schema, strict=False)` — регистрация схемы
-  - `unregister_schema(db_name)` — удаление схемы
-  - `__getattr__(db_name)` → `DatabaseGateway`
-  - При регистрации: проверка → миграция → создание gateway
-- **Режимы:**
-  - `strict=False` (default) — автосоздание
-  - `strict=True` — ошибка если существует
-  - `force=True` — DROP + CREATE
-- **Тест:** `tests/test_schema_integration.py`
-
-### Шаг 1.6: Автоопределение типов
+### Шаг 2.4: Автоопределение типов
 
 - **Файл:** `modules/db/type_inference.py` (создаём)
 - **Что:**
   - Функция `_infer_type(value)` → SQL-тип
-  - `str` → `TEXT`
-  - `int` → `INTEGER`
-  - `float` → `REAL`
-  - `bool` → `BOOLEAN`
-  - `datetime` → `TIMESTAMPTZ`
-  - `UUID` → `UUID`
-  - `dict` → `JSONB`
-  - `bytes` → `BYTEA`
-  - `list` → `JSONB`
+  - Маппинг: str→TEXT, int→INTEGER, float→REAL, bool→BOOLEAN, datetime→TIMESTAMPTZ, UUID→UUID, dict→JSONB, list→JSONB, bytes→BYTEA
 - **Тест:** `tests/test_type_inference.py`
 
-### Шаг 1.7: Удаление БД и таблиц
+### Шаг 2.5: Интеграция с DatabaseProvider
+
+- **Файл:** `modules/db/provider.py` (изменяем)
+- **Что:**
+  - `register_schema(db_name, schema, strict=False)` — регистрация схемы + автосоздание таблиц
+  - `unregister_schema(db_name)` — удаление схемы
+  - `__getattr__(db_name)` → `DatabaseGateway`
+  - `create_database(db_name)` / `drop_database(db_name)` — управление БД
+  - `create_table(db_name, table_name, schema)` / `drop_table(db_name, table_name)` — управление таблицами
+- **Режимы:**
+  - `strict=False` (default) — CREATE TABLE IF NOT EXISTS
+  - `strict=True` — ошибка если существует
+  - `force=True` — DROP + CREATE
+- **Тест:** `tests/test_schema_integration.py`
+
+### Шаг 2.6: Удаление БД и таблиц
 
 - **Файл:** `modules/db/provider.py` (добавляем методы)
 - **Что:**
@@ -209,14 +277,14 @@
 
 ---
 
-## Часть 2: Создание модуля auth
+## Часть 3: Создание модуля auth
 
-### Шаг 2.1: AuthProvider — провайдер авторизации
+### Шаг 3.1: AuthProvider — провайдер авторизации
 
 - **Файл:** `modules/auth/provider.py` (обновляем)
 - **Что:**
   - Регистрация схемы users/roles/permissions в on_load
-  - CRUD пользователей через state.db.auth.users
+  - CRUD пользователей через `state.db.auth.users`
   - Аутентификация (login/logout)
   - Авторизация (RBAC)
   - JWT токены
@@ -229,7 +297,7 @@
   - `role_permissions` (role_id UUID, permission_id UUID)
 - **Тест:** `tests/test_auth.py`
 
-### Шаг 2.2: Метаданные модуля auth
+### Шаг 3.2: Метаданные модуля auth
 
 - **Файл:** `modules/auth/__init__.py` (обновляем)
 - **Что:**
@@ -240,7 +308,7 @@
   - `__doc__` — описание модуля
 - **Авторегистрация:** `state.register_module("auth", provider)`
 
-### Шаг 2.3: Дефолтные роли и права
+### Шаг 3.3: Дефолтные роли и права
 
 - **Файл:** `modules/auth/defaults.py` (создаём)
 - **Что:**
@@ -249,7 +317,7 @@
   - Дефолтный администратор: `admin/admin`
 - **Создание при первой загрузке** если таблицы пусты
 
-### Шаг 2.4: Тесты auth
+### Шаг 3.4: Тесты auth
 
 - **Файл:** `modules/auth/tests/test_auth.py` (обновляем)
 - **Тесты:**
@@ -258,40 +326,6 @@
   - Проверка разрешений
   - Работа с ролями
   - Автосоздание таблиц
-
----
-
-## Часть 3: Метаданные модулей
-
-### Шаг 3.1: Module Metadata — система метаданных
-
-- **Файл:** `modules_system/module_metadata.py` (создаём)
-- **Что:**
-  - Класс `ModuleMetadata` для хранения метаданных
-  - `hash` — хэш модуля
-  - `state_class_name` — имя класса в State
-  - `main_class` — имя основного класса
-  - `methods` — описание методов
-  - `description` — описание модуля
-- **Тест:** `tests/test_module_metadata.py`
-
-### Шаг 3.2: Автоматическая регистрация в State
-
-- **Файл:** `core/application.py` (изменяем)
-- **Что:**
-  - При загрузке модуля проверяем `STATE_CLASS_NAME`
-  - Если есть — создаём базовый класс dynamically
-  - Регистрируем в State: `setattr(state, class_name.lower(), instance)`
-- **Тест:** `tests/test_auto_registration.py`
-
-### Шаг 3.3: Генерация --help
-
-- **Файл:** `modules_system/help_generator.py` (создаём)
-- **Что:**
-  - Функция `generate_help(module)` → строка help
-  - Парсинг docstring модуля и методов
-  - Форматированный вывод
-- **Тест:** `tests/test_help_generator.py`
 
 ---
 
@@ -306,6 +340,7 @@
   - Strict mode → ошибка если существует
   - Автоопределение типов
   - Удаление БД/таблиц
+  - Доступ через chaining API
 
 ### Шаг 4.2: Обновление существующих тестов
 
@@ -317,26 +352,32 @@
 ## Зависимости
 
 ```
-Часть 1 (db доработка):
-  Шаг 1.1 (TableGateway)
+Часть 1 (ядро mia):
+  Шаг 1.1 (ModuleMetadata)
     ↓
-  Шаг 1.2 (DatabaseGateway) ← зависит от 1.1
+  Шаг 1.2 (Module Registry) ← зависит от 1.1
     ↓
-  Шаг 1.3 (Schema Registry) ← параллельно с 1.2
+  Шаг 1.3 (Application.__getattr__) ← зависит от 1.2
     ↓
-  Шаг 1.4 (Migration Engine) ← зависит от 1.3
+  Шаг 1.4 (Help generator) ← параллельно с 1.3
     ↓
-  Шаг 1.5 (Интеграция с DatabaseProvider) ← зависит от 1.1-1.4
-    ↓
-  Шаг 1.6 (Автоопределение типов) ← параллельно с 1.5
-    ↓
-  Шаг 1.7 (Удаление БД/таблиц) ← зависит от 1.4
+  Шаг 1.5 (Интеграция с startup) ← зависит от 1.1-1.4
 
-Часть 2 (auth модуль):
-  Зависит от Части 1 (db доработка)
+Часть 2 (db доработка):
+  Шаг 2.1 (TableGateway)
+    ↓
+  Шаг 2.2 (DatabaseGateway) ← зависит от 2.1
+    ↓
+  Шаг 2.3 (Schema Registry) ← параллельно с 2.2
+    ↓
+  Шаг 2.4 (Type inference) ← параллельно с 2.3
+    ↓
+  Шаг 2.5 (Интеграция с DatabaseProvider) ← зависит от 2.1-2.4
+    ↓
+  Шаг 2.6 (Удаление БД/таблиц) ← зависит от 2.5
 
-Часть 3 (метаданные модулей):
-  Зависит от Части 1 (db доработка)
+Часть 3 (auth модуль):
+  Зависит от Части 2 (db доработка)
 
 Часть 4 (интеграция):
   Зависит от Частей 1-3
@@ -348,11 +389,11 @@
 
 | Часть | Шаги | Сложность | Оценка |
 |-------|------|-----------|--------|
-| 0. ядро mia | 0.1-0.6 | высокая | 3 дня |
-| 1. db доработка | 1.1-1.7 | высокая | 4 дня |
-| 2. auth модуль | 2.1-2.4 | средняя | 2 дня |
-| 3. Интеграция | 3.1-3.2 | средняя | 1 день |
-| **Итого** | | | **10 дней** |
+| 1. ядро mia | 1.1-1.5 | средняя | 2.5 дня |
+| 2. db доработка | 2.1-2.6 | высокая | 4 дня |
+| 3. auth модуль | 3.1-3.4 | средняя | 2 дня |
+| 4. Интеграция | 4.1-4.2 | средняя | 1 день |
+| **Итого** | | | **9.5 дней** |
 
 ---
 
@@ -360,10 +401,10 @@
 
 ```
 core/
-├── application.py       (обновлён — пост-загрузка модулей)
-├── state.py             (НОВЫЙ или обновлён — динамические атрибуты)
+├── application.py       (обновлён — __getattr__, пост-загрузка модулей)
 ├── database.py          (обновлён — register_schema, __getattr__)
-└── factories.py         (обновлён)
+├── factories.py         (обновлён)
+└── ...
 
 modules_system/
 ├── module_base.py       (без изменений)
@@ -373,22 +414,19 @@ modules_system/
 └── tests/
     ├── test_module_metadata.py
     ├── test_help_generator.py
-    ├── test_auto_registration.py
-    └── test_state.py
+    └── test_application_getattr.py
 
 modules/db/
 ├── __init__.py
-├── provider.py          (обновлён — register_schema, __getattr__)
+├── provider.py          (обновлён — register_schema, __getattr__, CRUD БД)
 ├── gateway.py           (НОВЫЙ — TableGateway, DatabaseGateway)
 ├── schema_registry.py   (НОВЫЙ — SchemaRegistry)
-├── migrations.py        (НОВЫЙ — MigrationEngine)
 ├── type_inference.py    (НОВЫЙ — автоопределение типов)
 ├── config.py
 ├── validators.py
 └── tests/
     ├── test_gateway.py
     ├── test_schema_registry.py
-    ├── test_migrations.py
     ├── test_type_inference.py
     ├── test_database_management.py
     └── test_schema_integration.py
@@ -404,4 +442,39 @@ modules/auth/
 
 tests/
 └── test_schema_first_e2e.py (НОВЫЙ — интеграционные тесты)
+```
+
+---
+
+## Пример использования
+
+```python
+from mia import Application
+
+# Создание
+app = Application()
+
+# Загрузка модулей
+app.load_module("db")
+app.load_module("auth")
+app.load_module("mail")
+
+# Startup (автосоздание таблиц)
+app.startup()
+
+# Доступ через app.state (Application как State)
+app.state.db  # DatabaseProvider
+app.state.auth  # AuthProvider
+app.state.mail  # MailProvider
+
+# Chaining API
+app.state.db.mail.outbound.insert(to="user@test.com", subject="Hello")
+app.state.db.auth.users.get(user_id="user:123")
+
+# Через app напрямую
+app.database  # IDatabase
+app.smart_dispatcher  # SmartDispatcher
+
+# Shutdown
+app.shutdown()
 ```
