@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from core.task import TaskType
 from modules.db.provider import db_method, _resolve_cache_key
 
 
@@ -72,6 +73,53 @@ def test_default_metrics() -> None:
         pass
 
     assert my_method._db_metrics == "db.my_method"
+
+
+# ── Тесты: маппинг типов DB → TaskType ─────────────────
+
+
+def test_type_mapping_read_to_io() -> None:
+    """type='read' → TaskType.IO."""
+
+    @db_method(type="read")
+    async def get(self) -> None:
+        pass
+
+    assert get._task_type == TaskType.IO
+    assert get._db_type == "read"
+
+
+def test_type_mapping_write_to_io() -> None:
+    """type='write' → TaskType.IO."""
+
+    @db_method(type="write")
+    async def put(self) -> None:
+        pass
+
+    assert put._task_type == TaskType.IO
+    assert put._db_type == "write"
+
+
+def test_type_mapping_aggregate() -> None:
+    """type='aggregate' → TaskType.AGGREGATE."""
+
+    @db_method(type="aggregate")
+    async def agg(self) -> None:
+        pass
+
+    assert agg._task_type == TaskType.AGGREGATE
+    assert agg._db_type == "aggregate"
+
+
+def test_type_mapping_transaction_to_database() -> None:
+    """type='transaction' → TaskType.DATABASE."""
+
+    @db_method(type="transaction")
+    async def txn(self) -> None:
+        pass
+
+    assert txn._task_type == TaskType.DATABASE
+    assert txn._db_type == "transaction"
 
 
 # ── Тесты: кеш ───────────────────────────────────────
