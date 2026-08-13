@@ -243,7 +243,6 @@ class TestMetricsUpdated:
         from monitoring.metrics import (
             api_calls_total,
             api_duration_seconds,
-            processpool_active,
             threadpool_active,
         )
 
@@ -258,11 +257,6 @@ class TestMetricsUpdated:
         hist = api_duration_seconds.labels(module="test", method="test")
         hist.observe(0.05)
         assert hist._sum.get() >= 0.05
-
-        # Gauge работает
-        gauge = processpool_active
-        gauge.set(5)
-        assert gauge._value.get() == 5
 
         # Threads gauge
         threads = threadpool_active

@@ -7,9 +7,6 @@ import pytest
 from prometheus_client import Counter, Gauge, Histogram
 
 from monitoring.metrics import (
-    # State
-    state_module_loads_total,
-    state_shutdowns_total,
     # API
     api_calls_total,
     api_duration_seconds,
@@ -17,16 +14,10 @@ from monitoring.metrics import (
     threadpool_active,
     threadpool_tasks_submitted_total,
     # Process pool
-    processpool_active,
     processpool_spawned_total,
     processpool_killed_total,
-    processpool_tasks_submitted_total,
     # Heartbeat
     heartbeat_missed_total,
-    heartbeat_restarts_total,
-    # Memory
-    memory_segments_active,
-    memory_bytes_allocated,
     # Server
     MetricsServer,
 )
@@ -78,8 +69,8 @@ def test_histogram_multiple_observations():
 
 def test_gauge_set():
     """Gauge устанавливает значение через set()."""
-    processpool_active.set(42)
-    assert processpool_active._value.get() == 42
+    threadpool_active.set(42)
+    assert threadpool_active._value.get() == 42
 
 
 def test_gauge_inc_dec():
@@ -120,9 +111,6 @@ def test_metrics_server_creation():
 def test_all_metrics_exist():
     """Все метрики из таблицы документации существуют и являются правильными типами."""
     metrics = {
-        # State
-        "state_module_loads_total": (Counter, state_module_loads_total),
-        "state_shutdowns_total": (Counter, state_shutdowns_total),
         # API
         "api_calls_total": (Counter, api_calls_total),
         "api_duration_seconds": (Histogram, api_duration_seconds),
@@ -130,16 +118,10 @@ def test_all_metrics_exist():
         "threadpool_active": (Gauge, threadpool_active),
         "threadpool_tasks_submitted_total": (Counter, threadpool_tasks_submitted_total),
         # Process pool
-        "processpool_active": (Gauge, processpool_active),
         "processpool_spawned_total": (Counter, processpool_spawned_total),
         "processpool_killed_total": (Counter, processpool_killed_total),
-        "processpool_tasks_submitted_total": (Counter, processpool_tasks_submitted_total),
         # Heartbeat
         "heartbeat_missed_total": (Counter, heartbeat_missed_total),
-        "heartbeat_restarts_total": (Counter, heartbeat_restarts_total),
-        # Memory
-        "memory_segments_active": (Gauge, memory_segments_active),
-        "memory_bytes_allocated": (Gauge, memory_bytes_allocated),
     }
 
     for name, (expected_type, metric) in metrics.items():
@@ -153,30 +135,21 @@ def test_all_metrics_exist():
 def test_metric_prefixes():
     """Все метрики имеют правильные префиксы слоёв."""
     expected_prefixes = [
-        "state_",
         "api_",
         "threadpool_",
         "processpool_",
         "heartbeat_",
-        "memory_",
     ]
 
     # Собираем все имена метрик из модуля
     all_metric_names = [
-        state_module_loads_total._name,
-        state_shutdowns_total._name,
         api_calls_total._name,
         api_duration_seconds._name,
         threadpool_active._name,
         threadpool_tasks_submitted_total._name,
-        processpool_active._name,
         processpool_spawned_total._name,
         processpool_killed_total._name,
-        processpool_tasks_submitted_total._name,
         heartbeat_missed_total._name,
-        heartbeat_restarts_total._name,
-        memory_segments_active._name,
-        memory_bytes_allocated._name,
     ]
 
     for name in all_metric_names:

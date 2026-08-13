@@ -4,16 +4,15 @@
 поскольку библиотека встраивается в другие проекты.
 
 Префиксы:
-  - state_      — State Manager (оркестрация)
   - api_        — API Proxy (вызовы методов)
   - threadpool_ — ThreadPoolManager
   - processpool_— ProcessPool
   - heartbeat_  — HeartbeatMonitor
-  - module_     — ModuleManager (загрузка модулей)
-  - memory_     — SharedMemoryManager
   - cpu_        — CpuMetricsCollector, CpuAffinityProvider
   - loadbalancer_ — LoadBalancer
   - worker_manager_ — WorkerManager
+  - dispatcher_ — SmartDispatcher
+  - cache_      — CacheHierarchy
 """
 from __future__ import annotations
 
@@ -22,22 +21,6 @@ from argenta_logging import get_logger
 import threading
 
 log = get_logger(__name__)
-
-
-# ============================================================
-# State Manager — оркестрация
-# ============================================================
-
-state_module_loads_total = Counter(
-    "state_module_loads_total",
-    "Total module load attempts",
-    ["module", "status"],
-)
-
-state_shutdowns_total = Counter(
-    "state_shutdowns_total",
-    "Total shutdown invocations",
-)
 
 
 # ============================================================
@@ -78,11 +61,6 @@ threadpool_tasks_submitted_total = Counter(
 # ProcessPool — процессы
 # ============================================================
 
-processpool_active = Gauge(
-    "processpool_active",
-    "Active worker processes",
-)
-
 processpool_spawned_total = Counter(
     "processpool_spawned_total",
     "Total processes spawned",
@@ -91,12 +69,6 @@ processpool_spawned_total = Counter(
 processpool_killed_total = Counter(
     "processpool_killed_total",
     "Total processes killed",
-)
-
-processpool_tasks_submitted_total = Counter(
-    "processpool_tasks_submitted_total",
-    "Total tasks submitted to process pool",
-    ["status"],
 )
 
 
@@ -109,39 +81,18 @@ heartbeat_missed_total = Counter(
     "Total missed heartbeats",
 )
 
-heartbeat_restarts_total = Counter(
-    "heartbeat_restarts_total",
-    "Total process restarts triggered by heartbeat",
-)
-
-
-# ============================================================
-# Memory — shared memory
-# ============================================================
-
-memory_segments_active = Gauge(
-    "memory_segments_active",
-    "Active shared memory segments",
-)
-
-memory_bytes_allocated = Gauge(
-    "memory_bytes_allocated",
-    "Total bytes allocated in shared memory",
-    ["segment"],
-)
-
 
 # ============================================================
 # CPU Metrics — сбор метрик CPU
 # ============================================================
 
-cpu_load_gauge = Gauge(
-    "cpu_load_gauge",
+cpu_load = Gauge(
+    "cpu_load",
     "Overall CPU load (0.0 - 1.0)",
 )
 
-cpu_per_core_load_gauge = Gauge(
-    "cpu_per_core_load_gauge",
+cpu_per_core_load = Gauge(
+    "cpu_per_core_load",
     "Per-core CPU load (0.0 - 1.0)",
     ["core"],
 )
@@ -151,10 +102,10 @@ cpu_per_core_load_gauge = Gauge(
 # Load Balancer — балансировка нагрузки
 # ============================================================
 
-loadbalancer_score_histogram = Histogram(
-    "loadbalancer_score_histogram",
+loadbalancer_score = Histogram(
+    "loadbalancer_score",
     "Worker selection score distribution",
-    buckets=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
+    buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
 )
 
 loadbalancer_selections_total = Counter(
@@ -212,36 +163,6 @@ cpu_affinity_errors_total = Counter(
 
 
 # ============================================================
-# Database Pool — пул соединений с БД
-# ============================================================
-
-db_pool_connections_total = Gauge(
-    "db_pool_connections_total",
-    "Total database pool connections",
-    ["state"],  # active, idle
-)
-
-db_pool_queries_total = Counter(
-    "db_pool_queries_total",
-    "Total database queries",
-    ["operation"],  # fetchrow, fetch, fetchval, execute
-)
-
-db_pool_query_duration_seconds = Histogram(
-    "db_pool_query_duration_seconds",
-    "Database query duration",
-    ["operation"],
-    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
-)
-
-db_pool_errors_total = Counter(
-    "db_pool_errors_total",
-    "Total database errors",
-    ["error_type"],
-)
-
-
-# ============================================================
 # Database — операции и кеш
 # ============================================================
 
@@ -267,6 +188,37 @@ database_cache_hits_total = Counter(
 database_cache_misses_total = Counter(
     "database_cache_misses_total",
     "Total database cache misses",
+)
+
+
+# ============================================================
+# Dispatcher — маршрутизация задач
+# ============================================================
+
+dispatcher_dispatch_total = Counter(
+    "dispatcher_dispatch_total",
+    "Total dispatched tasks",
+    ["pool", "db_type"],
+)
+
+
+# ============================================================
+# Cache Hierarchy — многоуровневый кеш
+# ============================================================
+
+cache_l0_size = Gauge(
+    "cache_l0_size",
+    "Current number of entries in L0 cache",
+)
+
+cache_l1_active = Gauge(
+    "cache_l1_active",
+    "Whether L1 cache layer is active (1 = active)",
+)
+
+cache_l2_active = Gauge(
+    "cache_l2_active",
+    "Whether L2 cache layer is active (1 = active)",
 )
 
 

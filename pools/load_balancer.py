@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from monitoring.metrics import (
-    loadbalancer_score_histogram,
+    loadbalancer_score,
     loadbalancer_selections_total,
     loadbalancer_no_worker_total,
 )
@@ -57,7 +57,7 @@ class LoadBalancer:
 
         for wid, state in workers.items():
             score = self._score(state)
-            loadbalancer_score_histogram.observe(score)
+            loadbalancer_score.observe(score)
 
             if score < best_score:
                 best_score = score

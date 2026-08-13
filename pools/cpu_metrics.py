@@ -5,7 +5,7 @@ import os
 import threading
 import time
 from argenta_logging import get_logger
-from monitoring.metrics import cpu_load_gauge, cpu_per_core_load_gauge
+from monitoring.metrics import cpu_load, cpu_per_core_load
 
 log = get_logger(__name__)
 
@@ -77,7 +77,7 @@ class CpuMetricsCollector:
                 delta_idle = idle - self._prev_idle
                 if delta_total > 0:
                     self._cpu_load = max(0.0, min(1.0, 1.0 - delta_idle / delta_total))
-                cpu_load_gauge.set(self._cpu_load)
+                cpu_load.set(self._cpu_load)
             self._prev_total = total
             self._prev_idle = idle
 
@@ -104,7 +104,7 @@ class CpuMetricsCollector:
                 else:
                     load = 0.0
                 new_per_core_load.append(load)
-                cpu_per_core_load_gauge.labels(core=str(idx)).set(load)
+                cpu_per_core_load.labels(core=str(idx)).set(load)
 
             self._per_core_load = new_per_core_load
             self._prev_per_core = per_core
