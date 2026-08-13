@@ -9,6 +9,7 @@ build/
 .env
 *.log
 venv/
+docs/
 
 # Modules (each module has its own git repo)
 modules/
