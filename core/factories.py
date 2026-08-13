@@ -104,3 +104,30 @@ class DatabaseFactory:
     def create(cache: Any | None = None, dispatcher: Any | None = None) -> IDatabase:
         from core.database import Database
         return Database(cache=cache, dispatcher=dispatcher)
+
+    @staticmethod
+    def create_with_task_system(
+        cache: Any | None = None,
+        dispatcher: Any | None = None,
+    ) -> tuple[IDatabase, Any, Any]:
+        """Создать Database с подключённым Universal Task System.
+
+        Returns:
+            (database, task_store, stats_writer)
+        """
+        from core.database import Database
+        from core.task_store import TaskStore
+        from core.stats_batch_writer import StatsBatchWriter
+
+        task_store = TaskStore()
+        database = Database(
+            cache=cache,
+            dispatcher=dispatcher,
+            task_store=task_store,
+            stats_writer=None,  # циклическая зависимость — устанавливается ниже
+        )
+        stats_writer = StatsBatchWriter(db=database)
+        # StatsBatchWriter теперь ссылается на database,
+        # а database ссылается на stats_writer — замыкание корректно
+        database._stats_writer = stats_writer
+        return database, task_store, stats_writer

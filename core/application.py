@@ -86,12 +86,16 @@ class Application:
         )
         self._services.register(IWorkerManager, worker_manager)
 
-        # Database + SmartDispatcher
+        # Database + SmartDispatcher + Task System
         smart_dispatcher = SmartDispatcher(thread_pool, worker_manager)
-        database = DatabaseFactory.create(cache=cache, dispatcher=smart_dispatcher)
+        database, task_store, stats_writer = DatabaseFactory.create_with_task_system(
+            cache=cache, dispatcher=smart_dispatcher,
+        )
         self._services.register(IDatabase, database)
 
         self._smart_dispatcher = smart_dispatcher
+        self._task_store = task_store
+        self._stats_writer = stats_writer
 
         # Module Registry
         module_registry = ModuleRegistry(modules_dir, allowed_modules)
@@ -163,6 +167,16 @@ class Application:
         return self._smart_dispatcher
 
     @property
+    def task_store(self) -> Any:
+        """Доступ к TaskStore."""
+        return self._task_store
+
+    @property
+    def stats_writer(self) -> Any:
+        """Доступ к StatsBatchWriter."""
+        return self._stats_writer
+
+    @property
     def services(self) -> IServiceProvider:
         """Доступ к DI контейнеру."""
         return self._services
@@ -170,7 +184,7 @@ class Application:
     # === Lifecycle ===
 
     def startup(self) -> None:
-        """Инициализация: запуск потоков, heartbeat, CPU metrics, ВОРКЕРОВ."""
+        """Инициализация: запуск потоков, heartbeat, CPU metrics, воркеров, task system."""
         self._services.resolve(IThreadPool).start()
         self._services.resolve(IHeartbeatMonitor).start()
         self._services.resolve(ICpuMetricsCollector).start()
@@ -179,11 +193,17 @@ class Application:
         worker_manager = self._services.resolve(IWorkerManager)
         worker_manager.start()
 
+        # Запуск StatsBatchWriter (фоновый flush статистики задач)
+        self._stats_writer.start()
+
         log.info("Application startup complete")
 
     def shutdown(self) -> None:
         """Корректное завершение."""
         log.info("Application shutting down")
+
+        # Остановить StatsBatchWriter (финальный flush)
+        self._stats_writer.stop()
 
         # Остановить CPU metrics
         self._services.resolve(ICpuMetricsCollector).stop()

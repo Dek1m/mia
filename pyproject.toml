@@ -18,7 +18,7 @@ dev = ["pytest>=7.0", "prometheus-client>=0.20.0"]
 [tool.setuptools]
 py-modules = [
     "core.interfaces", "core.errors", "core.application", "core.factories",
-    "core.service_registry",
+    "core.service_registry", "core.task", "core.task_decorator",
     "modules_system.module_base", "modules_system.module_manager",
     "modules_system.module_registry",
     "pools.thread_pool", "pools.cpu_affinity",

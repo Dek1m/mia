@@ -203,6 +203,50 @@ dispatcher_dispatch_total = Counter(
 
 
 # ============================================================
+# Universal Task System — метрики задач
+# ============================================================
+
+task_created_total = Counter(
+    "task_created_total",
+    "Total tasks created",
+    ["module", "task_type"],
+)
+
+task_completed_total = Counter(
+    "task_completed_total",
+    "Total tasks completed",
+    ["module", "task_type", "status"],
+)
+
+task_duration_seconds = Histogram(
+    "task_duration_seconds",
+    "Task execution duration",
+    ["module", "task_type"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
+)
+
+task_store_size = Gauge(
+    "task_store_size",
+    "Current number of tasks in ring buffer",
+)
+
+task_store_flush_total = Counter(
+    "task_store_flush_total",
+    "Total flush operations from StatsBatchWriter",
+)
+
+task_classifier_rules_total = Gauge(
+    "task_classifier_rules_total",
+    "Current number of classifier rules",
+)
+
+task_adaptive_overrides_total = Counter(
+    "task_adaptive_overrides_total",
+    "Total adaptive routing overrides",
+)
+
+
+# ============================================================
 # Cache Hierarchy — многоуровневый кеш
 # ============================================================
 
