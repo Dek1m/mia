@@ -17,6 +17,9 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.application import Application
+from argenta_logging import get_logger
+
+log = get_logger(__name__)
 
 
 def heavy_task(n: int) -> int:
@@ -26,38 +29,40 @@ def heavy_task(n: int) -> int:
 
 def main() -> None:
     """Запуск полной интеграции."""
-    print("=" * 60)
-    print("MIA — полная интеграция всех компонентов")
-    print("=" * 60)
+    log.info("Integration test started")
 
     # ── 1. Создание State ──────────────────────────────────────
-    print("\n[1] Создание State...")
+    log.info("Creating Application")
     state = Application(modules_dir="modules")
     state.startup()
-    print(f"    ThreadPool запущен: {state.thread_pool is not None}")
-    print(f"    Heartbeat запущен: {state.heartbeat is not None}")
+    log.info("Application started", extra={
+        "thread_pool": state.thread_pool is not None,
+        "heartbeat": state.heartbeat is not None,
+    })
 
     # ── 2. Module lifecycle ────────────────────────────────────
-    print("\n[2] Загрузка модулей (auto-discover)...")
+    log.info("Loading modules (auto-discover)")
     state.load_all_modules()
     loaded = state.modules.list_all()
-    print(f"    Загружены: {loaded}")
+    log.info("Modules loaded", extra={"modules": loaded})
 
     for name in state.modules.list_all():
         mod = state.modules.get(name)
-        print(f"    - {mod.name} v{mod.version}")
+        log.info("Module info", extra={"module": mod.name, "version": mod.version})
 
     # ── 3. API calls через ApiProxy ────────────────────────────
-    print("\n[3] API вызовы через state.api...")
+    log.info("Testing API calls via state.api")
     result_add = state.api.sample.add(1, 2)
     result_mul = state.api.sample.multiply(3, 4)
-    print(f"    sample.add(1, 2) = {result_add}")
-    print(f"    sample.multiply(3, 4) = {result_mul}")
-    assert result_add == 3, f"Ожидалось 3, получено {result_add}"
-    assert result_mul == 12, f"Ожидалось 12, получено {result_mul}"
+    log.info("API results", extra={
+        "add": result_add,
+        "multiply": result_mul,
+    })
+    assert result_add == 3, f"Expected 3, got {result_add}"
+    assert result_mul == 12, f"Expected 12, got {result_mul}"
 
     # ── 4. EventBus: pub/sub ───────────────────────────────────
-    print("\n[4] EventBus — pub/sub...")
+    log.info("Testing EventBus pub/sub")
     received = []
 
     def on_data(data):
@@ -65,47 +70,47 @@ def main() -> None:
 
     state.event_bus.subscribe("data.processed", on_data)
     state.event_bus.publish("data.processed", {"value": 42})
-    print(f"    Получено: {received}")
+    log.info("Event received", extra={"received": received})
     assert received == [{"value": 42}]
 
     # Публикация без подписчиков — не ошибка
     state.event_bus.publish("unsubscribed.event", "noise")
-    print("    Публикация без подписчиков: OK")
+    log.info("Publish without subscribers: OK")
 
     # ── 5. ThreadPool: @api_method(parallel=True) ──────────────
-    print("\n[5] ThreadPool — parallel API method...")
+    log.info("Testing ThreadPool parallel API method")
     future = state.thread_pool.submit(lambda: "Hello from thread!")
     thread_result = future.result(timeout=5)
-    print(f"    thread_pool.submit(lambda) = {thread_result}")
+    log.info("ThreadPool result", extra={"result": thread_result})
     assert thread_result == "Hello from thread!"
 
     # parallel метод через ApiProxy
     future2 = state.api.sample.heavy_computation([1, 2, 3, 4, 5])
     parallel_result = future2.result(timeout=5)
-    print(f"    sample.heavy_computation([1..5]) = {parallel_result}")
+    log.info("Parallel API result", extra={"result": parallel_result})
     assert parallel_result == 15
 
     # ── 6. WorkerManager: multiprocessing dispatching ──────────
-    print("\n[6] WorkerManager — multiprocessing...")
+    log.info("Testing WorkerManager multiprocessing")
     wm = state.worker_manager
-    print(f"    WorkerManager создан: {wm is not None}")
+    log.info("WorkerManager created", extra={"exists": wm is not None})
 
     proc_result = wm.submit(heavy_task, 100)
-    print(f"    heavy_task(100) = {proc_result}")
+    log.info("Worker task result", extra={"task": "heavy_task", "arg": 100, "result": proc_result})
     assert proc_result == sum(i * i for i in range(100))
 
     proc_result2 = wm.submit(heavy_task, 10)
-    print(f"    heavy_task(10) = {proc_result2}")
+    log.info("Worker task result", extra={"task": "heavy_task", "arg": 10, "result": proc_result2})
     assert proc_result2 == sum(i * i for i in range(10))
 
     # ── 7. Heartbeat: мониторинг процессов ─────────────────────
-    print("\n[7] Heartbeat — мониторинг...")
+    log.info("Testing Heartbeat monitoring")
     active = state.heartbeat.active_count
-    print(f"    Отслеживаемых процессов: {active}")
+    log.info("Heartbeat active processes", extra={"count": active})
     assert active >= 1
 
     # ── 8. EventBus: событие process.died ──────────────────────
-    print("\n[8] EventBus — process.died событие...")
+    log.info("Testing EventBus process.died event")
     death_events = []
 
     def on_process_died(data):
@@ -114,31 +119,25 @@ def main() -> None:
     state.event_bus.subscribe("process.died", on_process_died)
     # Симуляция — публикация вручную (в реальности приходит из heartbeat)
     state.event_bus.publish("process.died", {"pid": 99999})
-    print(f"    death_events: {death_events}")
+    log.info("Death events received", extra={"events": death_events})
     assert death_events == [{"pid": 99999}]
 
     # ── 9. Выгрузка модуля ─────────────────────────────────────
-    print("\n[9] Module lifecycle — unload...")
+    log.info("Testing module unload")
     state.unload_module("sample")
     assert "sample" not in state.modules.list_all()
-    print("    sample выгружен")
+    log.info("Module unloaded", extra={"module": "sample"})
     try:
         _ = state.api.sample
-        print("    ОШИБКА: sample доступен после выгрузки!")
+        log.error("Module still accessible after unload")
     except AttributeError:
-        print("    state.api.sample — AttributeError (ожидаемо)")
+        log.info("Module access after unload raises AttributeError (expected)")
 
     # ── 10. Shutdown ───────────────────────────────────────────
-    print("\n[10] Shutdown...")
+    log.info("Shutting down Application")
     state.shutdown()
-    print("    Все модули выгружены")
-    print("    ThreadPool остановлен")
-    print("    Heartbeat остановлен")
-    print("    WorkerManager остановлен")
-
-    print("\n" + "=" * 60)
-    print("ВСЕ КОМПОНЕНТЫ РАБОТАЮТ ВМЕСТЕ ✓")
-    print("=" * 60)
+    log.info("Application shutdown complete")
+    log.info("Integration test passed")
 
 
 if __name__ == "__main__":

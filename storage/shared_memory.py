@@ -18,7 +18,7 @@ class SharedMemoryManager:
         segment = shm.SharedMemory(create=True, size=size, name=name)
         with self._lock:
             self._segments[name] = segment
-        log.info("SharedMemory segment created", extra={"name": name, "size": size})
+        log.info("SharedMemory segment created", extra={"segment": name, "size": size})
         return segment
     
     def attach(self, name: str) -> shm.SharedMemory:
@@ -26,7 +26,7 @@ class SharedMemoryManager:
         segment = shm.SharedMemory(name=name)
         with self._lock:
             self._segments[name] = segment
-        log.info("SharedMemory segment attached", extra={"name": name})
+        log.info("SharedMemory segment attached", extra={"segment": name})
         return segment
     
     def cleanup(self) -> None:
@@ -39,5 +39,5 @@ class SharedMemoryManager:
                 segment.close()
                 segment.unlink()
             except Exception as e:
-                log.error("Failed to cleanup SharedMemory", extra={"name": name, "error": str(e)})
+                log.error("Failed to cleanup SharedMemory", extra={"segment": name, "error": str(e)})
         log.info("SharedMemory cleaned up")

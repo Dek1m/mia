@@ -3,6 +3,9 @@
 Запуск: python examples/integration_app.py
 """
 from core.application import Application
+from argenta_logging import get_logger
+
+log = get_logger(__name__)
 
 
 def main() -> None:
@@ -11,7 +14,7 @@ def main() -> None:
     app.load_all_modules()
 
     result = app.api.sample.add(1, 2)
-    print(f"1 + 2 = {result}")
+    log.info("API result", extra={"operation": "add", "args": [1, 2], "result": result})
 
     app.shutdown()
 
