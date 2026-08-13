@@ -18,9 +18,9 @@ def test_load_sample_module():
     state.load_module("sample")
     
     # Проверяем, что модуль загружен
-    assert "sample" in state._modules
-    assert state._modules["sample"].name == "sample"
-    assert state._modules["sample"].version == "1.0.0"
+    assert "sample" in state.modules.list_all()
+    assert state.modules.get("sample").name == "sample"
+    assert state.modules.get("sample").version == "1.0.0"
 
 
 def test_api_call():
@@ -52,7 +52,7 @@ def test_unload_module():
     state.unload_module("sample")
     
     # Проверяем, что модуль выгружен
-    assert "sample" not in state._modules
+    assert "sample" not in state.modules.list_all()
     
     # Проверяем, что API метод больше не доступен
     with pytest.raises(AttributeError):
@@ -74,13 +74,13 @@ def test_shutdown():
     
     # Загружаем несколько модулей (пока только sample)
     state.load_module("sample")
-    assert len(state._modules) == 1
+    assert len(state.modules.list_all()) == 1
     
     # Вызываем shutdown
     state.shutdown()
     
     # Проверяем, что все модули выгружены
-    assert len(state._modules) == 0
+    assert len(state.modules.list_all()) == 0
 
 
 def test_api_method_decorator():
@@ -124,7 +124,7 @@ def test_load_already_loaded():
     state.load_module("sample")  # Должно просто вернуться
     
     # Проверяем, что модуль всё ещё загружен
-    assert "sample" in state._modules
+    assert "sample" in state.modules.list_all()
 
 
 def test_module_base_version():
@@ -146,5 +146,5 @@ def test_module_on_load():
     
     # on_load уже был вызван при загрузке
     # Проверяем, что модуль корректно инициализирован
-    module = state._modules["sample"]
+    module = state.modules.get("sample")
     assert module.name == "sample"

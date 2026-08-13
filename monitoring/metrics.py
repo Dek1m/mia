@@ -212,6 +212,65 @@ cpu_affinity_errors_total = Counter(
 
 
 # ============================================================
+# Database Pool — пул соединений с БД
+# ============================================================
+
+db_pool_connections_total = Gauge(
+    "db_pool_connections_total",
+    "Total database pool connections",
+    ["state"],  # active, idle
+)
+
+db_pool_queries_total = Counter(
+    "db_pool_queries_total",
+    "Total database queries",
+    ["operation"],  # fetchrow, fetch, fetchval, execute
+)
+
+db_pool_query_duration_seconds = Histogram(
+    "db_pool_query_duration_seconds",
+    "Database query duration",
+    ["operation"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
+)
+
+db_pool_errors_total = Counter(
+    "db_pool_errors_total",
+    "Total database errors",
+    ["error_type"],
+)
+
+
+# ============================================================
+# Database — операции и кеш
+# ============================================================
+
+database_operations_total = Counter(
+    "database_operations_total",
+    "Total database operations",
+    ["operation", "status"],
+)
+
+database_operation_duration_seconds = Histogram(
+    "database_operation_duration_seconds",
+    "Database operation duration",
+    ["operation"],
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+)
+
+database_cache_hits_total = Counter(
+    "database_cache_hits_total",
+    "Total database cache hits",
+    ["level"],
+)
+
+database_cache_misses_total = Counter(
+    "database_cache_misses_total",
+    "Total database cache misses",
+)
+
+
+# ============================================================
 # MetricsServer
 # ============================================================
 

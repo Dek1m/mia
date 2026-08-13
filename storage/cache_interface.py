@@ -1,7 +1,8 @@
 """Cache Interface — Port для реализации кеш-адаптеров.
 
-Mia определяет ИНТЕРФЕЙС. Конкретная реализация (Redis, Memory, File)
-— это модуль, который пользователь подключает через on_load().
+Mia определяет ИНТЕРФЕЙС в core/interfaces.py (ICache).
+Этот модуль содержит NullCache (заглушку) и может быть расширен
+пользовательскими реализациями (Redis, Memory, File).
 
 Пример использования модулем:
     class MyCacheModule(ModuleBase):
@@ -22,68 +23,12 @@ Mia определяет ИНТЕРФЕЙС. Конкретная реализа
 """
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
 from typing import Any
 
+# Единственный источник ICache — core/interfaces.py (Dependency Rule)
+from core.interfaces import ICache  # noqa: F401 — re-export для обратной совместимости
 
-class ICache(ABC):
-    """Абстрактный интерфейс кеша.
-
-    Port в терминах Hexagonal Architecture.
-    Любая реализация кеша должна наследоваться от этого класса.
-    """
-
-    @abstractmethod
-    def get(self, key: str) -> Any | None:
-        """Получить значение по ключу.
-
-        Args:
-            key: Уникальный ключ кеша.
-
-        Returns:
-            Значение или None если ключ не найден/истёк.
-        """
-        ...
-
-    @abstractmethod
-    def set(self, key: str, value: Any, ttl: int | None = None) -> None:
-        """Сохранить значение в кеш.
-
-        Args:
-            key: Уникальный ключ кеша.
-            value: Значение для сохранения.
-            ttl: Время жизни в секундах. None = бессрочно.
-        """
-        ...
-
-    @abstractmethod
-    def delete(self, key: str) -> bool:
-        """Удалить значение по ключу.
-
-        Args:
-            key: Ключ для удаления.
-
-        Returns:
-            True если ключ существовал и был удалён.
-        """
-        ...
-
-    @abstractmethod
-    def exists(self, key: str) -> bool:
-        """Проверить наличие ключа в кеше.
-
-        Args:
-            key: Ключ для проверки.
-
-        Returns:
-            True если ключ существует и не истёк.
-        """
-        ...
-
-    @abstractmethod
-    def clear(self) -> None:
-        """Полностью очистить кеш."""
-        ...
+__all__ = ["ICache", "NullCache"]
 
 
 class NullCache(ICache):
@@ -92,7 +37,7 @@ class NullCache(ICache):
     Используется когда модуль кеша не загружен.
     Все методы — no-op. get() всегда возвращает None.
     Гарантирует что код, использующий state.cache, работает
-    без проверки "загружен ли кеш-модуль".
+    без проверки «загружен ли кеш-модуль».
     """
 
     def get(self, key: str) -> Any | None:

@@ -11,7 +11,7 @@ from argenta_logging import get_logger
 from core.interfaces import (
     ICache, IThreadPool, IEventBus,
     IHeartbeatMonitor, IModuleRegistry, IServiceProvider,
-    ICpuMetricsCollector, ILoadBalancer, IWorkerManager,
+    ICpuMetricsCollector, ILoadBalancer, IWorkerManager, IDatabase,
 )
 from storage.cache_interface import NullCache
 from core.service_registry import ServiceRegistry
@@ -21,7 +21,9 @@ from core.factories import (
     CacheFactory, ThreadPoolFactory,
     EventBusFactory, HeartbeatFactory,
     CpuMetricsCollectorFactory, LoadBalancerFactory, WorkerManagerFactory,
+    DatabaseFactory,
 )
+from pools.smart_dispatcher import SmartDispatcher
 from resilience.shutdown_manager import ShutdownManager
 from core.errors import ModuleLoadError
 
@@ -84,6 +86,13 @@ class Application:
         )
         self._services.register(IWorkerManager, worker_manager)
 
+        # Database + SmartDispatcher
+        smart_dispatcher = SmartDispatcher(thread_pool, worker_manager)
+        database = DatabaseFactory.create(cache=cache, dispatcher=smart_dispatcher)
+        self._services.register(IDatabase, database)
+
+        self._smart_dispatcher = smart_dispatcher
+
         # Module Registry
         module_registry = ModuleRegistry(modules_dir, allowed_modules)
         self._services.register(IModuleRegistry, module_registry)
@@ -124,19 +133,9 @@ class Application:
         return self._services.resolve(IHeartbeatMonitor)
 
     @property
-    def heartbeat_monitor(self) -> IHeartbeatMonitor:
-        """Доступ к монитору heartbeat (alias для обратной совместимости)."""
-        return self._services.resolve(IHeartbeatMonitor)
-
-    @property
     def modules(self) -> IModuleRegistry:
         """Доступ к реестру модулей."""
         return self._services.resolve(IModuleRegistry)
-
-    @property
-    def _modules(self) -> dict[str, Any]:
-        """Доступ к dict модулей (для обратной совместимости со State)."""
-        return self._services.resolve(IModuleRegistry)._modules
 
     @property
     def worker_manager(self) -> IWorkerManager:
@@ -152,6 +151,16 @@ class Application:
     def load_balancer(self) -> ILoadBalancer:
         """Доступ к балансировщику."""
         return self._services.resolve(ILoadBalancer)
+
+    @property
+    def database(self) -> IDatabase:
+        """Доступ к Database."""
+        return self._services.resolve(IDatabase)
+
+    @property
+    def smart_dispatcher(self) -> SmartDispatcher:
+        """Доступ к SmartDispatcher."""
+        return self._smart_dispatcher
 
     @property
     def services(self) -> IServiceProvider:
@@ -184,6 +193,9 @@ class Application:
 
         self._services.resolve(IHeartbeatMonitor).stop()
         self._services.resolve(IThreadPool).shutdown()
+
+        # Shutdown database
+        self._services.resolve(IDatabase).shutdown()
 
         # Выгрузить все модули
         registry = self._services.resolve(IModuleRegistry)

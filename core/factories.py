@@ -5,20 +5,34 @@ from typing import Any
 from argenta_logging import get_logger
 from core.interfaces import (
     ICache, IThreadPool, IEventBus, IHeartbeatMonitor,
-    ICpuMetricsCollector, ILoadBalancer, IWorkerManager,
+    ICpuMetricsCollector, ILoadBalancer, IWorkerManager, IDatabase,
 )
 
 log = get_logger(__name__)
 
 
 class CacheFactory:
-    """Фабрика кеш-бэкендов."""
-    
+    """Фабрика кеш-бэкендов.
+
+    backends:
+        null     — NullCache (заглушка)
+        hierarchy — CacheHierarchy (L0 dict → L1 SharedMemory → L2 Redis)
+    """
+
     @staticmethod
     def create(backend: str = "null", **kwargs: Any) -> ICache:
         if backend == "null":
             from storage.cache_interface import NullCache
             return NullCache()
+        if backend == "hierarchy":
+            from storage.cache_hierarchy import CacheHierarchy
+            return CacheHierarchy(
+                l1_shm=kwargs.get("l1_shm"),
+                l1_segment=kwargs.get("l1_segment", "cache_l1"),
+                l1_size=kwargs.get("l1_size", 4 * 1024 * 1024),
+                l2_redis=kwargs.get("l2_redis"),
+                default_ttl=kwargs.get("default_ttl", 300),
+            )
         raise ValueError(f"Unknown cache backend: {backend}")
 
 
@@ -81,3 +95,12 @@ class WorkerManagerFactory:
             load_balancer=load_balancer or LoadBalancer(),
             heartbeat_monitor=heartbeat_monitor,
         )
+
+
+class DatabaseFactory:
+    """Фабрика Database."""
+
+    @staticmethod
+    def create(cache: Any | None = None, dispatcher: Any | None = None) -> IDatabase:
+        from core.database import Database
+        return Database(cache=cache, dispatcher=dispatcher)

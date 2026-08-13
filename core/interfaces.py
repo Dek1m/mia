@@ -158,3 +158,43 @@ class IWorkerManager(ABC):
 
     @abstractmethod
     def get_worker_ids(self) -> list[int]: ...
+
+
+class IDatabase(ABC):
+    """Интерфейс Database — контракт для провайдеров."""
+
+    @abstractmethod
+    def register_provider(self, name: str, provider: Any, is_default: bool = False) -> None: ...
+
+    @abstractmethod
+    def get_provider(self, name: str | None = None) -> Any: ...
+
+    @abstractmethod
+    def get(self, table: str, id: str) -> dict | None: ...
+
+    @abstractmethod
+    def get_by_field(self, table: str, field: str, value: Any) -> dict | None: ...
+
+    @abstractmethod
+    def insert(self, table: str, data: dict) -> str: ...
+
+    @abstractmethod
+    def update(self, table: str, id: str, data: dict) -> dict | None: ...
+
+    @abstractmethod
+    def delete(self, table: str, id: str) -> bool: ...
+
+    @abstractmethod
+    def exists(self, table: str, id: str) -> bool: ...
+
+    @abstractmethod
+    def count(self, table: str, filters: dict | None = None) -> int: ...
+
+    @abstractmethod
+    def list(self, table: str, filters: dict | None = None, limit: int = 100, offset: int = 0) -> list[dict]: ...
+
+    @abstractmethod
+    def fetch(self, query: str, *params: Any) -> list[dict]: ...
+
+    @abstractmethod
+    def execute(self, query: str, *params: Any) -> str: ...

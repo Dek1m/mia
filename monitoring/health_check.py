@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from typing import Callable
+from typing import Any, Callable
 
 from argenta_logging import get_logger
 

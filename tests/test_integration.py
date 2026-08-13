@@ -85,7 +85,7 @@ class TestFullLifecycle:
 
         # 3. Загрузка модуля
         state.load_module("sample")
-        assert "sample" in state._modules
+        assert "sample" in state.modules.list_all()
 
         # 4. Вызов API
         result = state.api.sample.add(10, 20)
@@ -96,7 +96,7 @@ class TestFullLifecycle:
 
         # 5. Выгрузка модуля
         state.unload_module("sample")
-        assert "sample" not in state._modules
+        assert "sample" not in state.modules.list_all()
 
         # 6. Shutdown
         state.shutdown()
@@ -113,9 +113,9 @@ class TestMultipleModules:
         state.load_module("sample")
         state.load_module("notifications")
 
-        assert len(state._modules) == 2
-        assert "sample" in state._modules
-        assert "notifications" in state._modules
+        assert len(state.modules.list_all()) == 2
+        assert "sample" in state.modules.list_all()
+        assert "notifications" in state.modules.list_all()
 
         # API sample работает
         assert state.api.sample.add(1, 1) == 2
@@ -123,7 +123,7 @@ class TestMultipleModules:
         # Выгрузка обоих
         state.unload_module("sample")
         state.unload_module("notifications")
-        assert len(state._modules) == 0
+        assert len(state.modules.list_all()) == 0
 
         state.shutdown()
 
@@ -218,19 +218,19 @@ class TestHeartbeatMonitoring:
         state.startup()
 
         # Запоминаем количество уже зарегистрированных воркеров
-        base_count = state.heartbeat_monitor.active_count
+        base_count = state.heartbeat.active_count
 
         # Регистрируем фейковый PID
-        state.heartbeat_monitor.register(12345)
-        assert state.heartbeat_monitor.active_count == base_count + 1
+        state.heartbeat.register(12345)
+        assert state.heartbeat.active_count == base_count + 1
 
         # Обновляем heartbeat
-        state.heartbeat_monitor.update(12345)
-        assert state.heartbeat_monitor.active_count == base_count + 1
+        state.heartbeat.update(12345)
+        assert state.heartbeat.active_count == base_count + 1
 
         # Выегистрируем
-        state.heartbeat_monitor.unregister(12345)
-        assert state.heartbeat_monitor.active_count == base_count
+        state.heartbeat.unregister(12345)
+        assert state.heartbeat.active_count == base_count
 
         state.shutdown()
 
@@ -302,7 +302,7 @@ class TestErrorHandling:
 
         # Регистрируем модуль с ошибкой
         failing = FailingModule()
-        state._modules["failing"] = failing
+        state.modules._modules["failing"] = failing
         state._api_proxy.register_module(failing)
 
         # Загружаем рабочий модуль

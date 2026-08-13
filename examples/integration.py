@@ -35,15 +35,16 @@ def main() -> None:
     state = Application(modules_dir="modules")
     state.startup()
     print(f"    ThreadPool запущен: {state.thread_pool is not None}")
-    print(f"    Heartbeat запущен: {state.heartbeat_monitor is not None}")
+    print(f"    Heartbeat запущен: {state.heartbeat is not None}")
 
     # ── 2. Module lifecycle ────────────────────────────────────
     print("\n[2] Загрузка модулей (auto-discover)...")
     state.load_all_modules()
-    loaded = list(state._modules.keys())
+    loaded = state.modules.list_all()
     print(f"    Загружены: {loaded}")
 
-    for name, mod in state._modules.items():
+    for name in state.modules.list_all():
+        mod = state.modules.get(name)
         print(f"    - {mod.name} v{mod.version}")
 
     # ── 3. API calls через ApiProxy ────────────────────────────
@@ -99,7 +100,7 @@ def main() -> None:
 
     # ── 7. Heartbeat: мониторинг процессов ─────────────────────
     print("\n[7] Heartbeat — мониторинг...")
-    active = state.heartbeat_monitor.active_count
+    active = state.heartbeat.active_count
     print(f"    Отслеживаемых процессов: {active}")
     assert active >= 1
 
@@ -119,7 +120,7 @@ def main() -> None:
     # ── 9. Выгрузка модуля ─────────────────────────────────────
     print("\n[9] Module lifecycle — unload...")
     state.unload_module("sample")
-    assert "sample" not in state._modules
+    assert "sample" not in state.modules.list_all()
     print("    sample выгружен")
     try:
         _ = state.api.sample
