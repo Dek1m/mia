@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import logging
 import time
 from typing import Any, Callable, TypeVar
 
+from argenta_logging import get_logger
 from core.task import Task, TaskType
 from core.errors import MiaError
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
 
