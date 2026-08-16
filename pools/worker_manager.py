@@ -159,7 +159,11 @@ class WorkerManager:
         self._worker_states.clear()
         self._task_queue = None
         self._result_queue = None
-        self._heartbeat_queue = None
+        # Закрываем heartbeat queue стандартным образом — feeder-поток не должен висеть
+        if self._heartbeat_queue is not None:
+            self._heartbeat_queue.close()
+            self._heartbeat_queue.join_thread()
+            self._heartbeat_queue = None
         worker_manager_active.set(0)
         log.info("WorkerManager stopped")
 
@@ -307,7 +311,8 @@ class WorkerManager:
         while self._reader_running:
             try:
                 pid = self._heartbeat_queue.get(timeout=1.0)
-            except (queue.Empty, OSError):
+            except (queue.Empty, OSError, AttributeError):
+                # AttributeError если очередь уже None при гонке с stop()
                 continue
 
             if self._heartbeat_monitor:
