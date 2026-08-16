@@ -8,17 +8,38 @@ from argenta_logging import get_logger
 from core.interfaces import IModuleRegistry
 from modules_system.module_base import ModuleBase
 from modules_system.module_manager import ModuleManager
+from modules_system.verification import VerificationMode
 
 log = get_logger(__name__)
 
 
 class ModuleRegistry(IModuleRegistry):
-    """Реестр модулей с thread-safety."""
+    """Реестр модулей с thread-safety.
 
-    def __init__(self, modules_dir: str, allowed_modules: list[str] | None = None) -> None:
-        self._manager = ModuleManager(modules_dir, allowed_modules=allowed_modules)
+    Args:
+        modules_dir: Путь к директории с модулями.
+        allowed_modules: Whitelist имён модулей. Если None — разрешены все.
+        verification_mode: Режим хеш-верификации модулей.
+    """
+
+    def __init__(
+        self,
+        modules_dir: str,
+        allowed_modules: list[str] | None = None,
+        verification_mode: VerificationMode = VerificationMode.STRICT,
+    ) -> None:
+        self._manager = ModuleManager(
+            modules_dir,
+            allowed_modules=allowed_modules,
+            verification_mode=verification_mode,
+        )
         self._modules: dict[str, ModuleBase] = {}
         self._lock = threading.RLock()
+
+    @property
+    def verification_mode(self) -> VerificationMode:
+        """Текущий режим верификации."""
+        return self._manager.verification_mode
 
     def discover(self) -> list[str]:
         return self._manager.discover()

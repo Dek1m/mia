@@ -17,7 +17,10 @@ class CpuMetricsCollector:
     Thread-safe через RLock.
     """
 
-    def __init__(self, collect_interval: float = 1.0) -> None:
+    def __init__(self, collect_interval: float | None = None) -> None:
+        if collect_interval is None:
+            from core.config import MiaConfig
+            collect_interval = MiaConfig.get().get_value("pools.cpu_metrics.collect_interval", 1.0)
         self._collect_interval = collect_interval
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None

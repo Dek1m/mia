@@ -11,19 +11,27 @@ log = get_logger(__name__)
 
 
 def retry(
-    max_attempts: int = 3,
-    base_delay: float = 0.5,
-    max_delay: float = 30.0,
+    max_attempts: int | None = None,
+    base_delay: float | None = None,
+    max_delay: float | None = None,
     on_retry: Callable[[int, Exception], None] | None = None,
 ) -> Callable:
     """Декоратор повторных попыток с exponential backoff.
 
     Args:
-        max_attempts: Максимальное количество попыток.
-        base_delay: Базовая задержка в секундах.
-        max_delay: Максимальная задержка.
+        max_attempts: Максимальное количество попыток (None → config).
+        base_delay: Базовая задержка в секундах (None → config).
+        max_delay: Максимальная задержка (None → config).
         on_retry: Callback при повторной попытке (attempt, error).
     """
+    from core.config import MiaConfig
+    cfg = MiaConfig.get()
+    if max_attempts is None:
+        max_attempts = cfg.get_value("resilience.retry.max_attempts", 3)
+    if base_delay is None:
+        base_delay = cfg.get_value("resilience.retry.base_delay", 0.5)
+    if max_delay is None:
+        max_delay = cfg.get_value("resilience.retry.max_delay", 30.0)
 
     def decorator(fn: Callable) -> Callable:
         @functools.wraps(fn)

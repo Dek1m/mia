@@ -28,13 +28,15 @@ class CircuitBreaker:
 
     def __init__(
         self,
-        failure_threshold: int = 5,
-        recovery_timeout: float = 30.0,
-        success_threshold: int = 3,
+        failure_threshold: int | None = None,
+        recovery_timeout: float | None = None,
+        success_threshold: int | None = None,
     ) -> None:
-        self._failure_threshold = failure_threshold
-        self._recovery_timeout = recovery_timeout
-        self._success_threshold = success_threshold
+        from core.config import MiaConfig
+        cfg = MiaConfig.get()
+        self._failure_threshold = failure_threshold if failure_threshold is not None else cfg.get_value("resilience.circuit_breaker.failure_threshold", 5)
+        self._recovery_timeout = recovery_timeout if recovery_timeout is not None else cfg.get_value("resilience.circuit_breaker.recovery_timeout", 30.0)
+        self._success_threshold = success_threshold if success_threshold is not None else cfg.get_value("resilience.circuit_breaker.success_threshold", 3)
 
         self._state = State.CLOSED
         self._failure_count = 0

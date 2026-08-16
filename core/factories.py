@@ -11,6 +11,12 @@ from core.interfaces import (
 log = get_logger(__name__)
 
 
+def _cfg() -> Any:
+    """Ленивый импорт MiaConfig для избежания циклических импортов."""
+    from core.config import MiaConfig
+    return MiaConfig.get()
+
+
 class CacheFactory:
     """Фабрика кеш-бэкендов.
 
@@ -20,7 +26,9 @@ class CacheFactory:
     """
 
     @staticmethod
-    def create(backend: str = "null", **kwargs: Any) -> ICache:
+    def create(backend: str | None = None, **kwargs: Any) -> ICache:
+        if backend is None:
+            backend = _cfg().get_value("storage.cache.backend", "null")
         if backend == "null":
             from storage.cache_interface import NullCache
             return NullCache()
@@ -38,16 +46,18 @@ class CacheFactory:
 
 class ThreadPoolFactory:
     """Фабрика пулов потоков."""
-    
+
     @staticmethod
     def create(max_workers: int | None = None) -> IThreadPool:
         from pools.thread_pool import ThreadPoolManager
+        if max_workers is None:
+            max_workers = _cfg().get_value("pools.thread_pool.max_workers")
         return ThreadPoolManager(max_workers=max_workers)
 
 
 class EventBusFactory:
     """Фабрика шин событий."""
-    
+
     @staticmethod
     def create() -> IEventBus:
         from communication.event_bus import EventBus
@@ -56,10 +66,15 @@ class EventBusFactory:
 
 class HeartbeatFactory:
     """Фабрика мониторов heartbeat."""
-    
+
     @staticmethod
-    def create(timeout: float = 30.0, check_interval: float = 5.0) -> IHeartbeatMonitor:
+    def create(timeout: float | None = None, check_interval: float | None = None) -> IHeartbeatMonitor:
         from monitoring.heartbeat_monitor import HeartbeatMonitor
+        cfg = _cfg()
+        if timeout is None:
+            timeout = cfg.get_value("monitoring.heartbeat.timeout", 30.0)
+        if check_interval is None:
+            check_interval = cfg.get_value("monitoring.heartbeat.check_interval", 5.0)
         return HeartbeatMonitor(timeout=timeout, check_interval=check_interval)
 
 
@@ -67,8 +82,10 @@ class CpuMetricsCollectorFactory:
     """Фабрика сборщиков метрик CPU."""
 
     @staticmethod
-    def create(collect_interval: float = 1.0) -> ICpuMetricsCollector:
+    def create(collect_interval: float | None = None) -> ICpuMetricsCollector:
         from pools.cpu_metrics import CpuMetricsCollector
+        if collect_interval is None:
+            collect_interval = _cfg().get_value("pools.cpu_metrics.collect_interval", 1.0)
         return CpuMetricsCollector(collect_interval=collect_interval)
 
 

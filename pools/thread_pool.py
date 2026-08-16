@@ -18,6 +18,9 @@ class ThreadPoolManager:
     """
 
     def __init__(self, max_workers: int | None = None) -> None:
+        if max_workers is None:
+            from core.config import MiaConfig
+            max_workers = MiaConfig.get().get_value("pools.thread_pool.max_workers")
         self._max_workers = max_workers
         self._executor: ThreadPoolExecutor | None = None
         self._lock = threading.Lock()

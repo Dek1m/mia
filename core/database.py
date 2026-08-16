@@ -211,7 +211,10 @@ class Database(IDatabase):
     def count(self, table: str, filters: dict | None = None) -> int:
         return self._delegate("count", table, filters)
 
-    def list(self, table: str, filters: dict | None = None, limit: int = 100, offset: int = 0) -> list[dict]:
+    def list(self, table: str, filters: dict | None = None, limit: int | None = None, offset: int = 0) -> list[dict]:
+        if limit is None:
+            from core.config import MiaConfig
+            limit = MiaConfig.get().get_value("core.database.list_limit", 100)
         return self._delegate("list", table, filters, limit, offset)
 
     def fetch(self, query: str, *params: Any) -> list[dict]:

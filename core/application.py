@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import os
 import threading
 from typing import Any
 from argenta_logging import get_logger
@@ -16,6 +17,7 @@ from core.interfaces import (
 from storage.cache_interface import NullCache
 from core.service_registry import ServiceRegistry
 from modules_system.module_registry import ModuleRegistry
+from modules_system.verification import VerificationMode
 from communication.api_proxy import ApiProxy
 from core.factories import (
     CacheFactory, ThreadPoolFactory,
@@ -45,18 +47,46 @@ class Application:
 
     def __init__(
         self,
-        modules_dir: str = "modules",
+        modules_dir: str | None = None,
         allowed_modules: list[str] | None = None,
-        cache_backend: str = "null",
+        cache_backend: str | None = None,
+        verification_mode: VerificationMode | None = None,
     ) -> None:
-        self._modules_dir = modules_dir
+        """Создать Application.
+
+        Приоритет verification_mode:
+        1. Явный параметр verification_mode (если передан).
+        2. ENV MIA_MODULE_VERIFICATION ("strict"|"warn"|"disabled").
+        3. Файл mia.json5 (modules.verification.mode).
+        4. Дефолт: DISABLED.
+
+        Args:
+            modules_dir: Директория с модулями (None → config → "modules").
+            allowed_modules: Whitelist модулей (None = все).
+            cache_backend: Тип кеша (None → config → "null").
+            verification_mode: Режим верификации модулей.
+                None → ENV → config → disabled.
+        """
+        # Загрузка конфига (если ещё не загружен)
+        from core.config import MiaConfig
+        config = MiaConfig.get()
+
+        self._modules_dir = modules_dir or config.get_value("modules.dir", "modules")
+        self._cache_backend = cache_backend or config.get_value("storage.cache.backend", "null")
+        self._verification_mode = self._resolve_verification_mode(config, verification_mode)
         self._lock = threading.RLock()
+
+        # Реестры верификации модулей
+        # module_versions: {имя_модуля: "version:manifest_hash"}
+        self._module_versions: dict[str, str] = {}
+        # module_verification: {имя_модуля: True/False} — прошёл ли модуль верификацию
+        self._module_verification: dict[str, bool] = {}
 
         # Service Registry (DI)
         self._services = ServiceRegistry()
 
         # Cache
-        cache = CacheFactory.create(cache_backend)
+        cache = CacheFactory.create(self._cache_backend)
         self._services.register(ICache, cache)
 
         # Thread Pool
@@ -98,7 +128,7 @@ class Application:
         self._stats_writer = stats_writer
 
         # Module Registry
-        module_registry = ModuleRegistry(modules_dir, allowed_modules)
+        module_registry = ModuleRegistry(self._modules_dir, allowed_modules, verification_mode=self._verification_mode)
         self._services.register(IModuleRegistry, module_registry)
 
         # API Proxy
@@ -107,9 +137,54 @@ class Application:
         # Shutdown Manager
         self._shutdown_manager = ShutdownManager()
 
-        log.info("Application created", extra={"modules_dir": modules_dir})
+        log.info("Application created", extra={"modules_dir": self._modules_dir, "verification_mode": self._verification_mode.value})
 
     # === Properties ===
+
+    @staticmethod
+    def _resolve_verification_mode(config: Any, param: VerificationMode | None) -> VerificationMode:
+        """Определить режим верификации: параметр > ENV > файл > дефолт DISABLED.
+
+        Каскад:
+        1. Явный параметр (если передан).
+        2. ENV MIA_MODULE_VERIFICATION.
+        3. Файл mia.json5 (modules.verification.mode).
+        4. DISABLED.
+
+        Args:
+            config: MiaConfig instance.
+            param: Явно переданный параметр (None = не задан).
+
+        Returns:
+            VerificationMode для использования.
+        """
+        # Если параметр задан явно — он главнее
+        if param is not None:
+            return param
+
+        # Читаем ENV
+        env_value = os.getenv("MIA_MODULE_VERIFICATION", "").strip().lower()
+        if env_value:
+            try:
+                return VerificationMode.from_str(env_value)
+            except ValueError:
+                log.warning(
+                    "Неизвестное значение MIA_MODULE_VERIFICATION, используется DISABLED",
+                    extra={"env_value": env_value},
+                )
+
+        # Читаем из конфиг-файла
+        file_value = config.get_value("modules.verification.mode", "disabled")
+        if isinstance(file_value, str):
+            try:
+                return VerificationMode.from_str(file_value)
+            except ValueError:
+                log.warning(
+                    "Неизвестное значение modules.verification.mode, используется DISABLED",
+                    extra={"config_value": file_value},
+                )
+
+        return VerificationMode.DISABLED
 
     @property
     def api(self) -> ApiProxy:
@@ -181,6 +256,27 @@ class Application:
         """Доступ к DI контейнеру."""
         return self._services
 
+    @property
+    def verification_mode(self) -> VerificationMode:
+        """Текущий режим верификации модулей."""
+        return self._verification_mode
+
+    @property
+    def module_versions(self) -> dict[str, str]:
+        """Реестр версий модулей: {имя: 'version:manifest_hash'}.
+
+        Заполняется при загрузке модуля. Формат значения: 'v:hash'.
+        """
+        return self._module_versions
+
+    @property
+    def module_verification(self) -> dict[str, bool]:
+        """Реестр результатов верификации: {имя: True/False}.
+
+        True — модуль прошёл SHA256-верификацию, False — нет (warn/disabled/error).
+        """
+        return self._module_verification
+
     # === Lifecycle ===
 
     def startup(self) -> None:
@@ -232,6 +328,18 @@ class Application:
         try:
             module = registry.load(name, state=self)
             self._api_proxy.register_module(module)
+
+            # Заполнение реестров верификации из _verification_metadata
+            meta = getattr(module, "_verification_metadata", None)
+            if meta is not None:
+                version = meta.get("version") or "unknown"
+                manifest_hash = meta.get("manifest_hash") or "none"
+                self._module_versions[name] = f"{version}:{manifest_hash}"
+                self._module_verification[name] = meta.get("verified", False)
+            else:
+                self._module_versions[name] = "unknown:none"
+                self._module_verification[name] = False
+
             log.info("Module loaded", extra={"module_name": name})
         except Exception as e:
             log.error("Failed to load module", extra={"module_name": name, "error": str(e)})

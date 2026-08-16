@@ -24,7 +24,10 @@ class TaskStore:
     Завершённые (COMPLETED, FAILED, TIMEOUT) — в ring buffer (deque, maxlen=25000).
     """
 
-    def __init__(self, max_size: int = 25000) -> None:
+    def __init__(self, max_size: int | None = None) -> None:
+        if max_size is None:
+            from core.config import MiaConfig
+            max_size = MiaConfig.get().get_value("core.task_store.max_size", 25000)
         self._active: dict[UUID, Task] = {}
         self._history: deque[Task] = deque(maxlen=max_size)
         self._lock = threading.RLock()
@@ -79,8 +82,11 @@ class TaskStore:
         with self._lock:
             return list(self._active.values())
 
-    def get_history(self, limit: int = 100) -> list[Task]:
+    def get_history(self, limit: int | None = None) -> list[Task]:
         """Вернуть последние limit завершённых задач (новейшие первые)."""
+        if limit is None:
+            from core.config import MiaConfig
+            limit = MiaConfig.get().get_value("core.task_store.history_limit", 100)
         with self._lock:
             return list(reversed(list(self._history)[-limit:]))
 

@@ -31,12 +31,13 @@ class LoadBalancer:
     Чем меньше score — тем лучше воркер.
     """
 
-    WEIGHT_CPU = 0.7
-    WEIGHT_TASKS = 0.2
-    WEIGHT_STALE = 0.1
-    MAX_ACTIVE_TASKS = 10
-
     def __init__(self) -> None:
+        from core.config import MiaConfig
+        cfg = MiaConfig.get()
+        self.WEIGHT_CPU = cfg.get_value("pools.load_balancer.weight_cpu", 0.7)
+        self.WEIGHT_TASKS = cfg.get_value("pools.load_balancer.weight_tasks", 0.2)
+        self.WEIGHT_STALE = cfg.get_value("pools.load_balancer.weight_stale", 0.1)
+        self.MAX_ACTIVE_TASKS = cfg.get_value("pools.load_balancer.max_active_tasks", 10)
         self._workers: dict[int, WorkerState] = {}
 
     def select_worker(self, workers: dict[int, WorkerState]) -> int | None:

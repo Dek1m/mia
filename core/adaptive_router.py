@@ -7,12 +7,6 @@ from statistics import quantiles
 from core.task import Task, TaskType
 from core.task_store import TaskStore
 
-# Порог p95 duration (в секундах) для переключения типа
-P95_THRESHOLD = 0.1  # 100ms
-
-# Количество последних задач для анализа
-HISTORY_WINDOW = 1000
-
 # Карта переключений: текущий тип → рекомендуемый при превышении порога
 _OVERLOAD_MAP: dict[TaskType, TaskType] = {
     TaskType.IO: TaskType.CPU,
@@ -29,6 +23,10 @@ class AdaptiveRouter:
     """
 
     def __init__(self, task_store: TaskStore) -> None:
+        from core.config import MiaConfig
+        cfg = MiaConfig.get()
+        self._p95_threshold: float = cfg.get_value("core.routing.p95_threshold", 0.1)
+        self._history_window: int = cfg.get_value("core.routing.history_window", 1000)
         self._store = task_store
         # (module_id, task_type) → p95 duration
         self._p95_stats: dict[tuple[str, TaskType], float] = {}
@@ -36,7 +34,7 @@ class AdaptiveRouter:
 
     def update_stats(self) -> None:
         """Пересчитать p95 статистику из последних задач history."""
-        history = self._store.get_history(limit=HISTORY_WINDOW)
+        history = self._store.get_history(limit=self._history_window)
 
         # Группируем duration по (module_id, task_type)
         buckets: dict[tuple[str, TaskType], list[float]] = defaultdict(list)
@@ -64,7 +62,7 @@ class AdaptiveRouter:
         key = (task.module_id, task.task_type)
         p95 = self._p95_stats.get(key)
 
-        if p95 is None or p95 <= P95_THRESHOLD:
+        if p95 is None or p95 <= self._p95_threshold:
             return None
 
         return _OVERLOAD_MAP.get(task.task_type)
@@ -80,7 +78,7 @@ class AdaptiveRouter:
         for (mod, ttype), p95 in self._p95_stats.items():
             if mod != module_id:
                 continue
-            if p95 > P95_THRESHOLD and ttype in _OVERLOAD_MAP:
+            if p95 > self._p95_threshold and ttype in _OVERLOAD_MAP:
                 recommendations[ttype] = _OVERLOAD_MAP[ttype]
             else:
                 recommendations[ttype] = None

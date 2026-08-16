@@ -36,9 +36,15 @@ class StatsBatchWriter:
     def __init__(
         self,
         db: Any,
-        batch_size: int = 500,
-        flush_interval: float = 5.0,
+        batch_size: int | None = None,
+        flush_interval: float | None = None,
     ) -> None:
+        from core.config import MiaConfig
+        cfg = MiaConfig.get()
+        if batch_size is None:
+            batch_size = cfg.get_value("core.stats_writer.batch_size", 500)
+        if flush_interval is None:
+            flush_interval = cfg.get_value("core.stats_writer.flush_interval", 5.0)
         self._db = db
         self._batch_size = batch_size
         self._flush_interval = flush_interval
@@ -220,10 +226,12 @@ class StatsBatchWriter:
 
     def stop(self) -> None:
         """Корректная остановка: финальный flush + остановка потока."""
+        from core.config import MiaConfig
+        stop_timeout = MiaConfig.get().get_value("core.stats_writer.stop_timeout", 10.0)
         self._running = False
         self._flush_event.set()
         if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=10.0)
+            self._thread.join(timeout=stop_timeout)
         self._loop = None
         log.info("StatsBatchWriter stopped", extra={"remaining_buffer": self.buffer_size()})
 

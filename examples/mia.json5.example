@@ -1,0 +1,113 @@
+// Mia Framework Configuration
+// Каскад: defaults → mia.json5 → env MIA_*
+// Все значения ниже — текущие дефолты. Изменяйте только если нужно.
+// Скопируйте этот файл в ./mia.json5 и отредактируйте.
+
+{
+  // === CORE ===
+  "core": {
+    // Маршрутизация задач
+    "routing": {
+      "p95_threshold": 0.1,       // Порог p95 duration (сек) для переключения типа
+      "history_window": 1000,     // Количество последних задач для анализа
+    },
+
+    // Хранилище задач
+    "task_store": {
+      "max_size": 25000,          // Размер ring buffer завершённых задач
+      "history_limit": 100,       // Лимит по умолчанию для get_history()
+    },
+
+    // Батчевая запись статистики
+    "stats_writer": {
+      "batch_size": 500,          // Размер буфера перед flush
+      "flush_interval": 5.0,      // Интервал автоматического flush (сек)
+      "stop_timeout": 10.0,       // Таймаут остановки потока (сек)
+    },
+
+    // Параметры задач по умолчанию
+    "task": {
+      "timeout": 10.0,            // Таймаут выполнения задачи (сек)
+      "retry": 0,                 // Количество retry по умолчанию
+      "retry_delay": 0.5,         // Базовая задержка retry (сек)
+    },
+
+    // Shutdown
+    "shutdown": {
+      "timeout": 30.0,            // Таймаут graceful shutdown (сек)
+    },
+
+    // Database
+    "database": {
+      "list_limit": 100,          // Лимит для list() по умолчанию
+    },
+  },
+
+  // === POOLS ===
+  "pools": {
+    // Балансировщик нагрузки
+    "load_balancer": {
+      "weight_cpu": 0.7,          // Вес CPU load в scoring
+      "weight_tasks": 0.2,        // Вес active tasks в scoring
+      "weight_stale": 0.1,        // Вес stale penalty в scoring
+      "max_active_tasks": 10,     // Макс. active tasks для нормализации
+    },
+
+    // Сбор метрик CPU
+    "cpu_metrics": {
+      "collect_interval": 1.0,    // Интервал сбора CPU метрик (сек)
+    },
+
+    // Воркеры
+    "worker": {
+      "heartbeat_period": 5.0,    // Интервал heartbeat от воркеров (сек)
+      "stop_timeout": 5.0,        // Таймаут остановки воркеров (сек)
+    },
+
+    // ThreadPool
+    "thread_pool": {
+      "max_workers": null,        // null = число ядер CPU
+    },
+  },
+
+  // === RESILIENCE ===
+  "resilience": {
+    // Retry
+    "retry": {
+      "max_attempts": 3,          // Максимальное количество попыток
+      "base_delay": 0.5,          // Базовая задержка (сек)
+      "max_delay": 30.0,          // Максимальная задержка (сек)
+    },
+
+    // Circuit Breaker
+    "circuit_breaker": {
+      "failure_threshold": 5,     // Ошибок для перехода в OPEN
+      "recovery_timeout": 30.0,   // Секунд до HALF_OPEN
+      "success_threshold": 3,     // Успехов для возврата в CLOSED
+    },
+  },
+
+  // === MONITORING ===
+  "monitoring": {
+    "heartbeat": {
+      "timeout": 30.0,            // Таймаут без heartbeat (сек)
+      "check_interval": 5.0,      // Интервал проверки (сек)
+    },
+  },
+
+  // === MODULES ===
+  "modules": {
+    "dir": "modules",             // Директория с модулями
+    "max_init_size": 1000000,     // Макс. размер __init__.py (байты)
+    "verification": {
+      "mode": "disabled",         // strict | warn | disabled
+    },
+  },
+
+  // === STORAGE ===
+  "storage": {
+    "cache": {
+      "backend": "null",          // null | hierarchy
+    },
+  },
+}

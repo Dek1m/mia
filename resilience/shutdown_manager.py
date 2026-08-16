@@ -13,7 +13,10 @@ log = get_logger(__name__)
 class ShutdownManager(IShutdownManager):
     """Менеджер корректного завершения."""
     
-    def __init__(self, timeout: float = 30.0) -> None:
+    def __init__(self, timeout: float | None = None) -> None:
+        if timeout is None:
+            from core.config import MiaConfig
+            timeout = MiaConfig.get().get_value("core.shutdown.timeout", 30.0)
         self._timeout = timeout
         self._hooks: list[Callable] = []
         self._lock = threading.Lock()

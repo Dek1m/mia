@@ -21,9 +21,9 @@ class TaskValidationError(MiaError):
 
 def task(
     type: str = "unknown",
-    timeout: float = 10.0,
-    retry: int = 0,
-    retry_delay: float = 0.5,
+    timeout: float | None = None,
+    retry: int | None = None,
+    retry_delay: float | None = None,
     validate: type | None = None,
     audit: bool = False,
     metrics: str | None = None,
@@ -48,12 +48,19 @@ def task(
     """
     task_type = TaskType(type)
 
+    # Резолвим None-значения из конфига
+    from core.config import MiaConfig
+    cfg = MiaConfig.get()
+    resolved_timeout = timeout if timeout is not None else cfg.get_value("core.task.timeout", 10.0)
+    resolved_retry = retry if retry is not None else cfg.get_value("core.task.retry", 0)
+    resolved_retry_delay = retry_delay if retry_delay is not None else cfg.get_value("core.task.retry_delay", 0.5)
+
     def decorator(fn: F) -> F:
         # Установка метаданных на функцию
         fn._task_type = task_type  # type: ignore[attr-defined]
-        fn._task_timeout = timeout  # type: ignore[attr-defined]
-        fn._task_retry = retry  # type: ignore[attr-defined]
-        fn._task_retry_delay = retry_delay  # type: ignore[attr-defined]
+        fn._task_timeout = resolved_timeout  # type: ignore[attr-defined]
+        fn._task_retry = resolved_retry  # type: ignore[attr-defined]
+        fn._task_retry_delay = resolved_retry_delay  # type: ignore[attr-defined]
         fn._task_validate = validate  # type: ignore[attr-defined]
         fn._task_audit = audit  # type: ignore[attr-defined]
         fn._task_metrics = metrics  # type: ignore[attr-defined]
@@ -68,7 +75,7 @@ def task(
             task_obj = _create_task(fn, args, kwargs)
             _validate(task_obj, validate)
             return _execute_with_retry(
-                fn, args, kwargs, task_obj, retry, retry_delay, audit, metrics
+                fn, args, kwargs, task_obj, resolved_retry, resolved_retry_delay, audit, metrics
             )
 
         return wrapper  # type: ignore[return-value]
@@ -79,7 +86,7 @@ def task(
             task_obj = _create_task(fn, args, kwargs)
             _validate(task_obj, validate)
             return await _execute_with_retry_async(
-                fn, args, kwargs, task_obj, retry, retry_delay, audit, metrics
+                fn, args, kwargs, task_obj, resolved_retry, resolved_retry_delay, audit, metrics
             )
 
         return wrapper  # type: ignore[return-value]

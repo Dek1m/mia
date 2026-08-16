@@ -58,9 +58,11 @@ def _worker_entry(
         except queue.Empty:
             pass
 
-        # Каждые ~5 секунд отправляем heartbeat
+        # Каждые N секунд отправляем heartbeat
         now = time.time()
-        if heartbeat_queue is not None and now - last_heartbeat >= 5.0:
+        from core.config import MiaConfig
+        heartbeat_period = MiaConfig.get().get_value("pools.worker.heartbeat_period", 5.0)
+        if heartbeat_queue is not None and now - last_heartbeat >= heartbeat_period:
             try:
                 heartbeat_queue.put(os.getpid())
                 last_heartbeat = now
@@ -125,14 +127,17 @@ class WorkerManager:
         worker_manager_active.set(n)
         log.info("WorkerManager started", extra={"num_workers": n})
 
-    def stop(self, timeout: float = 5.0) -> None:
+    def stop(self, timeout: float | None = None) -> None:
         """Graceful shutdown всех воркеров.
 
         Args:
-            timeout: Таймаут ожидания завершения.
+            timeout: Таймаут ожидания завершения (None → config).
         """
         if self._task_queue is None:
             return
+        if timeout is None:
+            from core.config import MiaConfig
+            timeout = MiaConfig.get().get_value("pools.worker.stop_timeout", 5.0)
 
         for _ in self._workers.values():
             self._task_queue.put(None)

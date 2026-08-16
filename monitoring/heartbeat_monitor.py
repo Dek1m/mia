@@ -16,7 +16,14 @@ class HeartbeatMonitor:
         check_interval: Интервал проверки в секундах (по умолчанию 5).
     """
 
-    def __init__(self, timeout: float = 30.0, check_interval: float = 5.0) -> None:
+    def __init__(self, timeout: float | None = None, check_interval: float | None = None) -> None:
+        if timeout is None or check_interval is None:
+            from core.config import MiaConfig
+            cfg = MiaConfig.get()
+            if timeout is None:
+                timeout = cfg.get_value("monitoring.heartbeat.timeout", 30.0)
+            if check_interval is None:
+                check_interval = cfg.get_value("monitoring.heartbeat.check_interval", 5.0)
         self._timeout = timeout
         self._check_interval = check_interval
         self._heartbeats: dict[int, float] = {}  # pid -> last_heartbeat_time
