@@ -161,7 +161,7 @@ class TestExtractVersion:
         """
         modules_dir = Path(__file__).resolve().parent.parent / "modules"
 
-        for name, expected in [("auth", "1.0.0"), ("sample", "1.0.0")]:
+        for name, expected in [("auth", "2.0.0"), ("sample", "1.0.0")]:
             mod_dir = modules_dir / name
             if mod_dir.exists():
                 assert _extract_version(mod_dir) == expected, (
@@ -479,12 +479,15 @@ class TestRealModulesHashValidation:
     """Проверка что hash.json всех 6 модулей валидны."""
 
     @pytest.mark.parametrize("module_name,expected_version", [
-        ("auth", "1.0.0"),
+        ("auth", "2.0.0"),
         ("db", "1.0.0"),
-        ("mia-llm", "0.1.0"),
-        ("mia-sessions", "0.1.0"),
+        ("llm", "1.0.0"),
+        ("workspace", "1.0.0"),
         ("notifications", "0.0.0"),
         ("sample", "1.0.0"),
+        ("apiproxy", "1.0.0"),
+        ("cli", "1.0.0"),
+        ("rest", "1.0.0"),
     ])
     def test_hash_json_valid_and_correct_version(self, module_name, expected_version):
         """hash.json модуля валиден и содержит правильную версию."""
@@ -506,7 +509,8 @@ class TestRealModulesHashValidation:
         assert len(manifest.manifest_hash) == 64
 
     @pytest.mark.parametrize("module_name", [
-        "auth", "db", "mia-llm", "mia-sessions", "notifications", "sample",
+        "auth", "db", "llm", "workspace", "notifications", "sample",
+        "apiproxy", "cli", "rest",
     ])
     def test_hash_json_verify_module_passes(self, module_name):
         """verify_module для реального модуля проходит (файлы совпадают с хешами)."""
