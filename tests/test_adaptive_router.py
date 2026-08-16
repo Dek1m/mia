@@ -1,5 +1,5 @@
 """Unit-тесты для AdaptiveRouter — динамическая маршрутизация."""
-from core.adaptive_router import HISTORY_WINDOW, P95_THRESHOLD, AdaptiveRouter
+from core.adaptive_router import AdaptiveRouter
 from core.task import Task, TaskType
 from core.task_store import TaskStore
 

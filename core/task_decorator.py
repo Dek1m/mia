@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import time
 from typing import Any, Callable, TypeVar
 
@@ -17,6 +18,66 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 class TaskValidationError(MiaError):
     """Ошибка валидации входных данных задачи."""
+
+
+def _is_wrapped_async_gen(func: Any) -> bool:
+    """Проверить, является ли func обёрткой над async generator.
+
+    ``@asynccontextmanager`` оборачивает async generator в обычную функцию,
+    поэтому ``inspect.isasyncgenfunction`` возвращает False.
+    Проверяем через цепочку ``__wrapped__`` (устанавливается ``functools.wraps``).
+    """
+    seen: set[int] = set()
+    current = func
+    while current is not None and id(current) not in seen:
+        if inspect.isasyncgenfunction(current):
+            return True
+        seen.add(id(current))
+        current = getattr(current, "__wrapped__", None)
+    return False
+
+
+# Глобальный кеш dispatcher (устанавливается Application при старте)
+_global_dispatcher: Any | None = None
+
+
+def set_global_dispatcher(dispatcher: Any | None) -> None:
+    """Установить глобальный SmartDispatcher (вызывается Application).
+
+    Args:
+        dispatcher: Экземпляр SmartDispatcher или None.
+    """
+    global _global_dispatcher
+    _global_dispatcher = dispatcher
+
+
+def _resolve_dispatcher() -> Any | None:
+    """Разрешить SmartDispatcher: глобальный кеш > ServiceRegistry.
+
+    Returns:
+        SmartDispatcher если доступен, иначе None.
+    """
+    global _global_dispatcher
+    if _global_dispatcher is not None:
+        return _global_dispatcher
+
+    try:
+        from core.interfaces import ISmartDispatcher
+        import sys
+
+        # Ищем ServiceRegistry через sys.modules
+        for mod_name, mod_obj in sys.modules.items():
+            if not mod_name.startswith("core."):
+                continue
+            sr = getattr(mod_obj, "_services", None)
+            if sr is not None and hasattr(sr, "has") and sr.has(ISmartDispatcher):
+                _global_dispatcher = sr.resolve(ISmartDispatcher)
+                log.debug("SmartDispatcher resolved from ServiceRegistry")
+                return _global_dispatcher
+    except Exception:
+        pass
+
+    return None
 
 
 def task(
@@ -74,6 +135,21 @@ def task(
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             task_obj = _create_task(fn, args, kwargs)
             _validate(task_obj, validate)
+
+            # Пробуем получить dispatcher из ServiceRegistry
+            dispatcher = _resolve_dispatcher()
+            if dispatcher is not None:
+                try:
+                    # Диспатчим через SmartDispatcher
+                    future = dispatcher.dispatch_async(task_obj, fn, *args, **kwargs)
+                    return future.result(timeout=resolved_timeout)
+                except Exception as e:
+                    log.debug(
+                        "Dispatcher dispatch failed, falling back to inline",
+                        extra={"error": str(e)},
+                    )
+
+            # Fallback: inline выполнение
             return _execute_with_retry(
                 fn, args, kwargs, task_obj, resolved_retry, resolved_retry_delay, audit, metrics
             )
@@ -85,9 +161,36 @@ def task(
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             task_obj = _create_task(fn, args, kwargs)
             _validate(task_obj, validate)
+
+            # Пробуем получить dispatcher из ServiceRegistry
+            dispatcher = _resolve_dispatcher()
+            if dispatcher is not None:
+                try:
+                    # Диспатчим через SmartDispatcher
+                    future = dispatcher.dispatch_async(task_obj, fn, *args, **kwargs)
+                    # Оборачиваем Future в coroutine
+                    loop = asyncio.get_event_loop()
+                    return await asyncio.wrap_future(future, loop=loop)
+                except Exception as e:
+                    log.debug(
+                        "Dispatcher dispatch_async failed, falling back to inline",
+                        extra={"error": str(e)},
+                    )
+
+            # Fallback: inline выполнение
             return await _execute_with_retry_async(
                 fn, args, kwargs, task_obj, resolved_retry, resolved_retry_delay, audit, metrics
             )
+
+        # Если fn — async generator (например @asynccontextmanager),
+        # @task НЕ должен оборачивать его в coroutine.
+        # @asynccontextmanager оборачивает async gen в обычную функцию,
+        # поэтому isasyncgenfunction(fn) → False. Проверяем через __wrapped__.
+        if _is_wrapped_async_gen(fn):
+            def acm_wrapper(*args: Any, **kwargs: Any) -> Any:
+                return fn(*args, **kwargs)
+            functools.update_wrapper(acm_wrapper, fn)
+            return acm_wrapper  # type: ignore[return-value]
 
         return wrapper  # type: ignore[return-value]
 

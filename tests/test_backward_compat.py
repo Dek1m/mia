@@ -370,9 +370,7 @@ class TestDbMethodAcceptsAllLegacyParams:
             return {"id": id}
 
         provider = FakeProvider()
-        result = asyncio.get_event_loop().run_until_complete(
-            get_item(provider, "42")
-        )
+        result = asyncio.run(get_item(provider, "42"))
         assert result == {"id": "42"}
 
     def test_minimal_params(self) -> None:
@@ -447,9 +445,7 @@ class TestExistingCodeNotBroken:
             return {"id": id, "fresh": True}
 
         provider = FakeProvider(cache=cache)
-        result = asyncio.get_event_loop().run_until_complete(
-            get(provider, "42")
-        )
+        result = asyncio.run(get(provider, "42"))
         assert result == {"id": "42", "fresh": True}
         cached = cache.get("get:42")
         assert cached == {"id": "42", "fresh": True}

@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import inspect
 import threading
 from concurrent.futures import Future
 from typing import Any, Callable
@@ -78,6 +80,10 @@ class SmartDispatcher:
             "write": 0,
             "aggregate": 0,
             "transaction": 0,
+            "cpu": 0,
+            "gpu": 0,
+            "network": 0,
+            "database": 0,
         }
 
     # === Публичный API ===
@@ -117,6 +123,191 @@ class SmartDispatcher:
             fn_name=fn.__name__ if hasattr(fn, "__name__") else "unknown",
         )
         return self._dispatch_two_phase(task, fn, *call_args, **kwargs)
+
+    def dispatch_async(
+        self, first: Any, *args: Any, **kwargs: Any,
+    ) -> Future:
+        """Асинхронная маршрутизация задачи через ThreadPool.
+
+        Если ``fn`` — coroutine function, оборачивается в sync-обёртку
+        с ``asyncio.run()`` и передаётся в ThreadPoolExecutor.
+        Если ``fn`` — sync, делегирует в ``dispatch()``.
+
+        Поддерживает два режима вызова (как dispatch):
+          1. ``dispatch_async(task, fn, *args, **kwargs)`` — явный Task
+          2. ``dispatch_async(fn, *args, **kwargs)`` — без Task
+
+        Returns:
+            Future с результатом выполнения.
+        """
+        # Определяем режим вызова
+        if isinstance(first, Task):
+            task = first
+            fn = args[0]
+            call_args = args[1:]
+        else:
+            fn = first
+            call_args = args
+            task = None
+
+        # Если fn — coroutine function, оборачиваем в sync-обёртку
+        if inspect.iscoroutinefunction(fn):
+            # Создаём Task если не передан явно
+            if task is None:
+                task = Task.create(
+                    module_id=fn.__module__ if hasattr(fn, "__module__") else "unknown",
+                    fn_name=fn.__name__ if hasattr(fn, "__name__") else "unknown",
+                )
+
+            # Классификация и override (как в _dispatch_two_phase)
+            if self._classifier is not None:
+                task.task_type = self._classifier.classify(task, fn)
+            if self._adaptive_router is not None:
+                override_type = self._adaptive_router.override(task)
+                if override_type is not None:
+                    task.task_type = override_type
+
+            # Интеграция с TaskStore
+            if self._task_store is not None:
+                self._task_store.add(task)
+
+            # Оборачиваем async-функцию в sync для ThreadPool.
+            # Если в текущем потоке уже есть running loop (например FakeThreadPool
+            # выполняет _async_wrapper inline) — запускаем в отдельном потоке,
+            # чтобы не конфликтовать с существующим loop.
+            # Если running loop нет (реальный ThreadPoolExecutor worker) —
+            # asyncio.run() напрямую без лишних потоков.
+            def _async_wrapper() -> Any:
+                try:
+                    running_loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    running_loop = None
+
+                if running_loop is not None:
+                    # Running loop есть — выполняем в отдельном потоке
+                    result: Any = None
+                    exc_holder: list[Exception] = []
+
+                    def _run_in_thread() -> None:
+                        nonlocal result
+                        try:
+                            result = asyncio.run(fn(*call_args, **kwargs))
+                        except Exception as exc:
+                            exc_holder.append(exc)
+
+                    thread = threading.Thread(target=_run_in_thread, daemon=True)
+                    thread.start()
+                    thread.join()
+                    if exc_holder:
+                        raise exc_holder[0]
+                    return result
+                else:
+                    # Нет running loop — asyncio.run() напрямую
+                    return asyncio.run(fn(*call_args, **kwargs))
+
+            task.start()
+            needs_lock = task.task_type == TaskType.IO and getattr(fn, "_db_lock", False)
+
+            if needs_lock:
+                with self._write_lock:
+                    self._metrics["write"] += 1
+                    threadpool_tasks_submitted_total.labels(status="ok").inc()
+                    future = self._thread_pool.submit(_async_wrapper)
+            else:
+                metric_key = _task_type_to_metric_key(task.task_type)
+                self._metrics[metric_key] += 1
+                threadpool_tasks_submitted_total.labels(status="ok").inc()
+                future = self._thread_pool.submit(_async_wrapper)
+
+            # Обработка результата для TaskStore
+            def _on_done(fut: Future) -> None:
+                try:
+                    result_value = fut.result()
+                    if self._task_store is not None:
+                        self._task_store.complete(task, result=result_value)
+                    task_completed_total.labels(
+                        module=task.module_id,
+                        task_type=task.task_type.value,
+                        status="completed",
+                    ).inc()
+                    if task.duration is not None:
+                        task_duration_seconds.labels(
+                            module=task.module_id,
+                            task_type=task.task_type.value,
+                        ).observe(task.duration)
+                except Exception as exc:
+                    if self._task_store is not None:
+                        self._task_store.fail(task, str(exc))
+                    task_completed_total.labels(
+                        module=task.module_id,
+                        task_type=task.task_type.value,
+                        status="failed",
+                    ).inc()
+
+            future.add_done_callback(_on_done)
+            return future
+
+        # sync-функция — оборачиваем в Future через thread pool
+        if task is None:
+            task = Task.create(
+                module_id=fn.__module__ if hasattr(fn, "__module__") else "unknown",
+                fn_name=fn.__name__ if hasattr(fn, "__name__") else "unknown",
+            )
+
+        # Классификация и override
+        if self._classifier is not None:
+            task.task_type = self._classifier.classify(task, fn)
+        if self._adaptive_router is not None:
+            override_type = self._adaptive_router.override(task)
+            if override_type is not None:
+                task.task_type = override_type
+
+        if self._task_store is not None:
+            self._task_store.add(task)
+
+        task.start()
+        needs_lock = task.task_type == TaskType.IO and getattr(fn, "_db_lock", False)
+
+        def _sync_wrapper() -> Any:
+            return fn(*call_args, **kwargs)
+
+        if needs_lock:
+            with self._write_lock:
+                self._metrics["write"] += 1
+                threadpool_tasks_submitted_total.labels(status="ok").inc()
+                future = self._thread_pool.submit(_sync_wrapper)
+        else:
+            metric_key = _task_type_to_metric_key(task.task_type)
+            self._metrics[metric_key] += 1
+            threadpool_tasks_submitted_total.labels(status="ok").inc()
+            future = self._thread_pool.submit(_sync_wrapper)
+
+        def _on_done(fut: Future) -> None:
+            try:
+                result_value = fut.result()
+                if self._task_store is not None:
+                    self._task_store.complete(task, result=result_value)
+                task_completed_total.labels(
+                    module=task.module_id,
+                    task_type=task.task_type.value,
+                    status="completed",
+                ).inc()
+                if task.duration is not None:
+                    task_duration_seconds.labels(
+                        module=task.module_id,
+                        task_type=task.task_type.value,
+                    ).observe(task.duration)
+            except Exception as exc:
+                if self._task_store is not None:
+                    self._task_store.fail(task, str(exc))
+                task_completed_total.labels(
+                    module=task.module_id,
+                    task_type=task.task_type.value,
+                    status="failed",
+                ).inc()
+
+        future.add_done_callback(_on_done)
+        return future
 
     def acquire_lock(self) -> None:
         """Захватить блокировку записей (для ручного управления)."""
@@ -283,14 +474,13 @@ class SmartDispatcher:
 
 def _task_type_to_metric_key(task_type: TaskType) -> str:
     """Преобразовать TaskType → ключ метрики."""
-    if task_type == TaskType.AGGREGATE:
-        return "aggregate"
-    if task_type in (TaskType.IO, TaskType.DATABASE):
-        return "read"
-    if task_type == TaskType.CPU:
-        return "read"
-    if task_type == TaskType.GPU:
-        return "read"
-    if task_type == TaskType.NETWORK:
-        return "read"
-    return "read"
+    _MAP: dict[TaskType, str] = {
+        TaskType.IO: "read",
+        TaskType.CPU: "cpu",
+        TaskType.GPU: "gpu",
+        TaskType.NETWORK: "network",
+        TaskType.DATABASE: "database",
+        TaskType.AGGREGATE: "aggregate",
+        TaskType.UNKNOWN: "read",
+    }
+    return _MAP.get(task_type, "read")

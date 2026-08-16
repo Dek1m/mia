@@ -13,6 +13,7 @@ from core.interfaces import (
     ICache, IThreadPool, IEventBus,
     IHeartbeatMonitor, IModuleRegistry, IServiceProvider,
     ICpuMetricsCollector, ILoadBalancer, IWorkerManager, IDatabase,
+    ISmartDispatcher,
 )
 from storage.cache_interface import NullCache
 from core.service_registry import ServiceRegistry
@@ -118,6 +119,12 @@ class Application:
 
         # Database + SmartDispatcher + Task System
         smart_dispatcher = SmartDispatcher(thread_pool, worker_manager)
+        self._services.register(ISmartDispatcher, smart_dispatcher)
+
+        # Регистрируем глобальный dispatcher для @task decorator
+        from core.task_decorator import set_global_dispatcher
+        set_global_dispatcher(smart_dispatcher)
+
         database, task_store, stats_writer = DatabaseFactory.create_with_task_system(
             cache=cache, dispatcher=smart_dispatcher,
         )

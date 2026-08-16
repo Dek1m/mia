@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from core.adaptive_router import AdaptiveRouter, P95_THRESHOLD
+from core.adaptive_router import AdaptiveRouter
 from core.database import Database
 from core.task import Task, TaskStatus, TaskType
 from core.task_classifier import TaskClassifier
@@ -658,7 +658,7 @@ class TestTaskDecoratorE2E:
         async def async_compute(x: int) -> int:
             return x * 3
 
-        result = asyncio.get_event_loop().run_until_complete(async_compute(7))
+        result = asyncio.run(async_compute(7))
         assert result == 21
 
     def test_decorator_preserves_metadata(self):

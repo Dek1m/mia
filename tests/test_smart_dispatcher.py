@@ -408,7 +408,8 @@ class TestNewMetrics:
         dispatcher.dispatch(io_fn)
 
         m = dispatcher.metrics
-        assert m["read"] >= 1  # IO → read в метриках
+        # db module → DATABASE → "database" в метриках (точный маппинг)
+        assert m["database"] >= 1
 
     def test_aggregate_dispatches_to_worker_manager(self, full_deps):
         dispatcher, tp, wm, store, _, _ = full_deps

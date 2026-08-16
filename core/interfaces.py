@@ -160,6 +160,45 @@ class IWorkerManager(ABC):
     def get_worker_ids(self) -> list[int]: ...
 
 
+class ISmartDispatcher(ABC):
+    """Интерфейс SmartDispatcher — контракт для маршрутизатора задач."""
+
+    @abstractmethod
+    def dispatch(self, first: Any, *args: Any, **kwargs: Any) -> Any:
+        """Маршрутизировать и выполнить задачу (sync)."""
+        ...
+
+    @abstractmethod
+    def dispatch_async(self, first: Any, *args: Any, **kwargs: Any) -> Any:
+        """Маршрутизировать задачу асинхронно через ThreadPool.
+
+        Args:
+            first: Task-объект или функция для выполнения.
+            *args: Аргументы функции.
+            **kwargs: Именованные аргументы функции.
+
+        Returns:
+            Future с результатом выполнения.
+        """
+        ...
+
+    @abstractmethod
+    def acquire_lock(self) -> None:
+        """Захватить блокировку записей."""
+        ...
+
+    @abstractmethod
+    def release_lock(self) -> None:
+        """Освободить блокировку записей."""
+        ...
+
+    @property
+    @abstractmethod
+    def metrics(self) -> dict[str, int]:
+        """Количество выполненных задач по типам."""
+        ...
+
+
 class IDatabase(ABC):
     """Интерфейс Database — контракт для провайдеров."""
 
