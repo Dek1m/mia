@@ -28,6 +28,7 @@ def _worker_entry(
     result_queue: multiprocessing.Queue,
     worker_id: int,
     core_id: int,
+    heartbeat_queue: multiprocessing.Queue | None = None,
 ) -> None:
     """Точка входа worker-процесса."""
     signal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))
@@ -39,6 +40,8 @@ def _worker_entry(
         pass
 
     log.info("Worker started", extra={"worker_id": worker_id, "pid": os.getpid(), "core": core_id})
+
+    last_heartbeat = time.time()
 
     while True:
         try:
@@ -53,7 +56,16 @@ def _worker_entry(
                 log.error("Worker error", extra={"worker_id": worker_id, "error": str(e)})
                 result_queue.put((request_id, "error", str(e)))
         except queue.Empty:
-            continue
+            pass
+
+        # Каждые ~5 секунд отправляем heartbeat
+        now = time.time()
+        if heartbeat_queue is not None and now - last_heartbeat >= 5.0:
+            try:
+                heartbeat_queue.put(os.getpid())
+                last_heartbeat = now
+            except (OSError, ValueError):
+                pass
 
     log.info("Worker stopped", extra={"worker_id": worker_id})
 
@@ -77,10 +89,12 @@ class WorkerManager:
         self._worker_states: dict[int, WorkerState] = {}
         self._task_queue: multiprocessing.Queue | None = None
         self._result_queue: multiprocessing.Queue | None = None
+        self._heartbeat_queue: multiprocessing.Queue | None = None
         self._lock = threading.Lock()
         self._pending: dict[str, tuple[threading.Event, list]] = {}
         self._reader_thread: threading.Thread | None = None
         self._reader_running = False
+        self._heartbeat_thread: threading.Thread | None = None
         self._cpu_count = os.cpu_count() or 1
 
     @property
@@ -96,10 +110,14 @@ class WorkerManager:
         n = num_workers or self._cpu_count
         self._task_queue = multiprocessing.Queue()
         self._result_queue = multiprocessing.Queue()
+        self._heartbeat_queue = multiprocessing.Queue()
 
         self._reader_running = True
         self._reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self._reader_thread.start()
+
+        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self._heartbeat_thread.start()
 
         for i in range(n):
             self._spawn_worker(i)
@@ -129,6 +147,9 @@ class WorkerManager:
         if self._reader_thread:
             self._reader_thread.join(timeout=2)
 
+        if self._heartbeat_thread:
+            self._heartbeat_thread.join(timeout=2)
+
         if self._heartbeat_monitor:
             for pid in list(self._worker_ids.keys()):
                 self._heartbeat_monitor.unregister(pid)
@@ -138,6 +159,7 @@ class WorkerManager:
         self._worker_states.clear()
         self._task_queue = None
         self._result_queue = None
+        self._heartbeat_queue = None
         worker_manager_active.set(0)
         log.info("WorkerManager stopped")
 
@@ -247,7 +269,7 @@ class WorkerManager:
         core_id = worker_id % self._cpu_count
         p = multiprocessing.Process(
             target=_worker_entry,
-            args=(self._task_queue, self._result_queue, worker_id, core_id),
+            args=(self._task_queue, self._result_queue, worker_id, core_id, self._heartbeat_queue),
         )
         p.start()
         self._workers[p.pid] = p
@@ -259,7 +281,7 @@ class WorkerManager:
         self._load_balancer.update_worker_state(worker_id, state)
 
         if self._heartbeat_monitor:
-            self._heartbeat_monitor.register(p.pid)
+            self._heartbeat_monitor.register(p.pid, {"worker_id": worker_id})
 
         log.info("Worker spawned", extra={"worker_id": worker_id, "pid": p.pid, "core": core_id})
 
@@ -279,6 +301,20 @@ class WorkerManager:
                 container[0] = status
                 container[1] = result
                 event.set()
+
+    def _heartbeat_loop(self) -> None:
+        """Читает heartbeat из очереди и обновляет HeartbeatMonitor."""
+        while self._reader_running:
+            try:
+                pid = self._heartbeat_queue.get(timeout=1.0)
+            except (queue.Empty, OSError):
+                continue
+
+            if self._heartbeat_monitor:
+                try:
+                    self._heartbeat_monitor.update(pid)
+                except Exception:
+                    pass
 
     def _sync_worker_states(self) -> None:
         """Синхронизировать состояния воркеров."""

@@ -1,4 +1,5 @@
 """Unit-тесты для HeartbeatMonitor."""
+import logging
 import time
 from unittest.mock import MagicMock, patch
 
@@ -52,6 +53,20 @@ def test_register_process(monitor):
     assert 1234 in monitor._heartbeats
 
 
+def test_register_with_meta(monitor):
+    """register(pid, meta) сохраняет мета-данные."""
+    monitor.register(1234, {"worker_id": 7})
+    assert monitor.active_count == 1
+    assert 1234 in monitor._meta
+    assert monitor._meta[1234] == {"worker_id": 7}
+
+
+def test_register_without_meta(monitor):
+    """register(pid) без meta не создаёт запись в _meta."""
+    monitor.register(1234)
+    assert 1234 not in monitor._meta
+
+
 def test_register_multiple_processes(monitor):
     """Несколько register(pid) добавляют несколько процессов."""
     monitor.register(100)
@@ -67,6 +82,14 @@ def test_unregister_process(monitor):
     monitor.unregister(1234)
     assert monitor.active_count == 0
     assert 1234 not in monitor._heartbeats
+
+
+def test_unregister_clears_meta(monitor):
+    """unregister(pid) удаляет и мета-данные."""
+    monitor.register(1234, {"worker_id": 3})
+    assert 1234 in monitor._meta
+    monitor.unregister(1234)
+    assert 1234 not in monitor._meta
 
 
 def test_unregister_nonexistent(monitor):
@@ -168,6 +191,53 @@ def test_timeout_handler_exception_does_not_crash(running_monitor):
     # Мониторинг всё ещё работает
     running_monitor.register(5678)
     assert running_monitor.active_count == 2
+
+
+# === Meta в логах ===
+
+def test_meta_in_timeout_warning(running_monitor, caplog):
+    """Meta (worker_id) попадает в warning при heartbeat timeout."""
+    running_monitor.register(42, {"worker_id": 7})
+
+    with caplog.at_level(logging.WARNING, logger="monitoring.heartbeat_monitor"):
+        time.sleep(0.5)
+
+    timeout_records = [r for r in caplog.records if "Heartbeat timeout" in r.message]
+    assert len(timeout_records) >= 1
+    rec = timeout_records[0]
+    assert rec.pid == 42
+    assert getattr(rec, "worker_id", None) == 7
+
+
+def test_meta_not_in_warning_without_meta(running_monitor, caplog):
+    """Без meta — в warning нет worker_id."""
+    running_monitor.register(99)
+
+    with caplog.at_level(logging.WARNING, logger="monitoring.heartbeat_monitor"):
+        time.sleep(0.5)
+
+    timeout_records = [r for r in caplog.records if "Heartbeat timeout" in r.message]
+    assert len(timeout_records) >= 1
+    rec = timeout_records[0]
+    assert rec.pid == 99
+    assert not hasattr(rec, "worker_id")
+
+
+# === Update продлевает жизнь ===
+
+def test_update_extends_lifetime(running_monitor):
+    """Регулярный update() не даёт процессу быть помеченным как мёртвый."""
+    handler = MagicMock()
+    running_monitor.set_timeout_handler(handler)
+    running_monitor.register(100)
+
+    # Обновляем heartbeat каждые 0.15s (timeout=0.3s) на протяжении 1s
+    for _ in range(10):
+        time.sleep(0.15)
+        running_monitor.update(100)
+
+    time.sleep(0.1)
+    handler.assert_not_called()
 
 
 # === Start/Stop ===

@@ -20,6 +20,7 @@ class HeartbeatMonitor:
         self._timeout = timeout
         self._check_interval = check_interval
         self._heartbeats: dict[int, float] = {}  # pid -> last_heartbeat_time
+        self._meta: dict[int, dict] = {}  # pid -> мета (worker_id и пр.)
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._running = False
@@ -30,16 +31,24 @@ class HeartbeatMonitor:
         """Установить обработчик таймаута (вызывается при смерти процесса)."""
         self._on_timeout = handler
 
-    def register(self, pid: int) -> None:
-        """Зарегистрировать процесс для мониторинга."""
+    def register(self, pid: int, meta: dict | None = None) -> None:
+        """Зарегистрировать процесс для мониторинга.
+
+        Args:
+            pid: PID процесса.
+            meta: Произвольные мета-данные (worker_id и пр.), попадут в логи.
+        """
         with self._lock:
             self._heartbeats[pid] = time.time()
-            log.debug("Process registered", extra={"pid": pid})
+            if meta:
+                self._meta[pid] = meta
+            log.debug("Process registered", extra={"pid": pid, **(meta or {})})
 
     def unregister(self, pid: int) -> None:
         """Убрать процесс из мониторинга."""
         with self._lock:
             self._heartbeats.pop(pid, None)
+            self._meta.pop(pid, None)
             log.debug("Process unregistered", extra={"pid": pid})
 
     def update(self, pid: int) -> None:
@@ -80,7 +89,10 @@ class HeartbeatMonitor:
                 if now - last_beat > self._timeout:
                     dead_pids.append(pid)
                     heartbeat_missed_total.inc()
-                    log.warning("Heartbeat timeout", extra={"pid": pid, "last_beat": now - last_beat})
+                    log.warning(
+                        "Heartbeat timeout",
+                        extra={"pid": pid, "last_beat": now - last_beat, **self._meta.get(pid, {})},
+                    )
 
         # Вызов обработчика вне лока
         for pid in dead_pids:
