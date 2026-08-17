@@ -26,10 +26,28 @@ class FakeWorkerManager:
         return fn(*args, **kwargs)
 
 
+class FakeThreadPool:
+    """Заглушка ThreadPool для тестов."""
+
+    def __init__(self) -> None:
+        self.submitted: list[tuple] = []
+
+    def submit(self, fn, *args, **kwargs):
+        self.submitted.append((fn, args, kwargs))
+        return fn(*args, **kwargs)
+
+    def start(self) -> None:
+        pass
+
+    def shutdown(self, wait: bool = True) -> None:
+        pass
+
+
 @pytest.fixture
 def dispatcher():
     wm = FakeWorkerManager()
-    return SmartDispatcher(wm), wm
+    tp = FakeThreadPool()
+    return SmartDispatcher(wm, thread_pool=tp), wm, tp
 
 
 # === Тесты async bridge ===
@@ -39,8 +57,8 @@ class TestDispatchAsync:
     """Тесты dispatch_async для async-функций."""
 
     def test_async_function_dispatched_via_worker_manager(self, dispatcher) -> None:
-        """Async-функция диспатчится через dispatch_async."""
-        dp, wm = dispatcher
+        """Async-функция диспатчится через WorkerManager."""
+        dp, wm, tp = dispatcher
 
         async def async_fn(x: int) -> int:
             return x * 2
@@ -52,7 +70,7 @@ class TestDispatchAsync:
 
     def test_async_function_with_task_object(self, dispatcher) -> None:
         """dispatch_async с явным Task-объектом."""
-        dp, wm = dispatcher
+        dp, wm, tp = dispatcher
 
         async def async_fn(x: int) -> int:
             return x + 10
@@ -62,15 +80,15 @@ class TestDispatchAsync:
         assert future.result() == 13
 
     def test_sync_function_via_dispatch_async(self, dispatcher) -> None:
-        """sync-функция через dispatch_async тоже работает."""
-        dp, wm = dispatcher
+        """sync-функция через dispatch_async идёт через ThreadPool."""
+        dp, wm, tp = dispatcher
 
         def sync_fn(x: int) -> int:
             return x * 3
 
         future = dp.dispatch_async(sync_fn, 4)
         assert future.result() == 12
-        assert len(wm.submitted) == 1
+        assert len(tp.submitted) == 1
 
 
 # === Тесты @task без dispatcher ===
@@ -118,7 +136,8 @@ class TestTaskWithDispatcher:
     def test_sync_task_uses_dispatcher(self) -> None:
         """sync @task dispatch через SmartDispatcher когда dispatcher установлен."""
         wm = FakeWorkerManager()
-        dp = SmartDispatcher(wm)
+        tp = FakeThreadPool()
+        dp = SmartDispatcher(wm, thread_pool=tp)
         set_global_dispatcher(dp)
 
         @task(type="cpu", timeout=5.0)
@@ -134,7 +153,8 @@ class TestTaskWithDispatcher:
     def test_async_task_uses_dispatcher(self) -> None:
         """async @task dispatch через SmartDispatcher когда dispatcher установлен."""
         wm = FakeWorkerManager()
-        dp = SmartDispatcher(wm)
+        tp = FakeThreadPool()
+        dp = SmartDispatcher(wm, thread_pool=tp)
         set_global_dispatcher(dp)
 
         @task(type="cpu", timeout=5.0)

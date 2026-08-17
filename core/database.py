@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, TypeVar
+from typing import Any
 
 from argenta_logging import get_logger
 from core.interfaces import IDatabase
@@ -15,29 +15,24 @@ from monitoring.metrics import (
 
 log = get_logger(__name__)
 
-T = TypeVar("T")
-
 
 class Database(IDatabase):
     """Фасад Database — управляет реестром провайдеров.
 
     Опционально интегрируется с Universal Task System:
-    каждая CRUD-операция создаёт Task, трекается в TaskStore,
-    результат пишется в StatsBatchWriter.
+    каждая CRUD-операция проходит через SmartDispatcher.
     """
 
     def __init__(
         self,
         cache: Any | None = None,
         dispatcher: Any | None = None,
-        task_store: Any | None = None,
         stats_writer: Any | None = None,
     ) -> None:
         self._providers: dict[str, Any] = {}
         self._default_provider: str | None = None
         self._cache = cache
         self._dispatcher = dispatcher
-        self._task_store = task_store
         self._stats_writer = stats_writer
 
     def register_provider(self, name: str, provider: Any, is_default: bool = False) -> None:
@@ -56,34 +51,6 @@ class Database(IDatabase):
         method = getattr(provider, method_name)
         return method(*args, **kwargs)
 
-    def _run_task(self, fn_name: str, operation: Callable[[], T]) -> T:
-        """Выполнить операцию через Universal Task System (если подключён).
-
-        Создаёт Task → добавляет в TaskStore → выполняет операцию →
-        complete/fail через TaskStore → записывает в StatsBatchWriter.
-        """
-        if self._task_store is None or self._stats_writer is None:
-            return operation()
-
-        from core.task import Task, TaskType
-
-        task = Task.create(
-            module_id="database",
-            fn_name=fn_name,
-            task_type=TaskType.DATABASE,
-        )
-        self._task_store.add(task)
-        self._task_store.start(task)
-        try:
-            result = operation()
-            self._task_store.complete(task, result)
-            return result
-        except Exception as e:
-            self._task_store.fail(task, str(e))
-            raise
-        finally:
-            self._stats_writer.add(task)
-
     def get(self, table: str, id: str) -> dict | None:
         cache_key = f"db:{table}:{id}"
         if self._cache is not None:
@@ -95,11 +62,10 @@ class Database(IDatabase):
             database_cache_misses_total.inc()
         start = time.monotonic()
         try:
-            result = self._run_task(
-                "get",
-                lambda: self._dispatcher.dispatch(self._provider_get, table, id)
+            result = (
+                self._dispatcher.dispatch(self._provider_get, table, id)
                 if self._dispatcher is not None
-                else self._delegate("get", table, id),
+                else self._delegate("get", table, id)
             )
             database_operations_total.labels(operation="get", status="ok").inc()
             log.debug("db_get", extra={"table": table, "id": id, "found": result is not None})
@@ -124,11 +90,10 @@ class Database(IDatabase):
             database_cache_misses_total.inc()
         start = time.monotonic()
         try:
-            result = self._run_task(
-                "get_by_field",
-                lambda: self._dispatcher.dispatch(self._provider_get_by_field, table, field, value)
+            result = (
+                self._dispatcher.dispatch(self._provider_get_by_field, table, field, value)
                 if self._dispatcher is not None
-                else self._delegate("get_by_field", table, field, value),
+                else self._delegate("get_by_field", table, field, value)
             )
             database_operations_total.labels(operation="get_by_field", status="ok").inc()
             log.debug("db_get_by_field", extra={"table": table, "field": field, "found": result is not None})
@@ -145,11 +110,10 @@ class Database(IDatabase):
     def insert(self, table: str, data: dict) -> str:
         start = time.monotonic()
         try:
-            result = self._run_task(
-                "insert",
-                lambda: self._dispatcher.dispatch(self._provider_insert, table, data)
+            result = (
+                self._dispatcher.dispatch(self._provider_insert, table, data)
                 if self._dispatcher is not None
-                else self._delegate("insert", table, data),
+                else self._delegate("insert", table, data)
             )
             database_operations_total.labels(operation="insert", status="ok").inc()
             log.debug("db_insert", extra={"table": table, "id": result})
@@ -166,11 +130,10 @@ class Database(IDatabase):
     def update(self, table: str, id: str, data: dict) -> dict | None:
         start = time.monotonic()
         try:
-            result = self._run_task(
-                "update",
-                lambda: self._dispatcher.dispatch(self._provider_update, table, id, data)
+            result = (
+                self._dispatcher.dispatch(self._provider_update, table, id, data)
                 if self._dispatcher is not None
-                else self._delegate("update", table, id, data),
+                else self._delegate("update", table, id, data)
             )
             database_operations_total.labels(operation="update", status="ok").inc()
             log.debug("db_update", extra={"table": table, "id": id})
@@ -187,11 +150,10 @@ class Database(IDatabase):
     def delete(self, table: str, id: str) -> bool:
         start = time.monotonic()
         try:
-            result = self._run_task(
-                "delete",
-                lambda: self._dispatcher.dispatch(self._provider_delete, table, id)
+            result = (
+                self._dispatcher.dispatch(self._provider_delete, table, id)
                 if self._dispatcher is not None
-                else self._delegate("delete", table, id),
+                else self._delegate("delete", table, id)
             )
             database_operations_total.labels(operation="delete", status="ok").inc()
             log.debug("db_delete", extra={"table": table, "id": id, "success": result})

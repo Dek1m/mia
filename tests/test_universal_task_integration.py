@@ -24,7 +24,6 @@ import pytest
 
 from core.task import Task, TaskStatus, TaskType
 from core.task_decorator import task, set_global_dispatcher
-from core.task_store import TaskStore
 from pools.smart_dispatcher import SmartDispatcher, _task_type_to_metric_key
 
 
@@ -42,12 +41,30 @@ class FakeWorkerManager:
         return fn(*args, **kwargs)
 
 
+class FakeThreadPool:
+    """Синхронный ThreadPool."""
+
+    def __init__(self) -> None:
+        self.submitted: list[tuple] = []
+
+    def submit(self, fn, *args, **kwargs):
+        self.submitted.append((fn, args, kwargs))
+        return fn(*args, **kwargs)
+
+    def start(self) -> None:
+        pass
+
+    def shutdown(self, wait: bool = True) -> None:
+        pass
+
+
 @pytest.fixture
 def fake_dispatcher():
-    """SmartDispatcher с FakeWorkerManager."""
+    """SmartDispatcher с FakeWorkerManager и FakeThreadPool."""
     wm = FakeWorkerManager()
-    dp = SmartDispatcher(wm)
-    return dp, wm
+    tp = FakeThreadPool()
+    dp = SmartDispatcher(wm, thread_pool=tp)
+    return dp, wm, tp
 
 
 @pytest.fixture
@@ -60,11 +77,10 @@ def real_dispatcher():
 
 @pytest.fixture
 def full_dispatcher():
-    """SmartDispatcher с TaskStore."""
+    """SmartDispatcher с FakeWorkerManager."""
     wm = FakeWorkerManager()
-    store = TaskStore()
-    dp = SmartDispatcher(wm, task_store=store)
-    return dp, wm, store
+    dp = SmartDispatcher(wm)
+    return dp, wm
 
 
 # ── 1. Async bridge: async-функция диспатчится через WorkerManager ──
@@ -74,8 +90,8 @@ class TestAsyncBridge:
     """Проверка async bridge: async-функции корректно выполняются через dispatch_async."""
 
     def test_sync_function_via_dispatch_async(self, fake_dispatcher) -> None:
-        """sync-функция через dispatch_async работает."""
-        dp, wm = fake_dispatcher
+        """sync-функция через dispatch_async идёт через ThreadPool."""
+        dp, wm, tp = fake_dispatcher
 
         def sync_fn(x: int) -> int:
             return x * 3
@@ -83,7 +99,7 @@ class TestAsyncBridge:
         future = dp.dispatch_async(sync_fn, 4)
         assert isinstance(future, Future)
         assert future.result() == 12
-        assert len(wm.submitted) == 1
+        assert len(tp.submitted) == 1
 
     def test_async_function_dispatched_via_worker_manager(
         self, real_dispatcher,
@@ -102,7 +118,7 @@ class TestAsyncBridge:
 
     def test_async_function_with_task_object(self, fake_dispatcher) -> None:
         """dispatch_async с явным Task-объектом."""
-        dp, wm = fake_dispatcher
+        dp, wm, tp = fake_dispatcher
 
         async def async_fn(x: int) -> int:
             return x + 10
@@ -116,11 +132,11 @@ class TestAsyncBridge:
 
 
 class TestTaskWithDispatcher:
-    """Проверка: @task dispatch через SmartDispatcher создаёт Task в TaskStore."""
+    """Проверка: @task dispatch через SmartDispatcher."""
 
-    def test_sync_task_creates_task_in_store(self, full_dispatcher) -> None:
-        """sync @task создаёт Task в TaskStore через dispatcher."""
-        dp, wm, store = full_dispatcher
+    def test_sync_task_dispatches(self, full_dispatcher) -> None:
+        """sync @task dispatch через SmartDispatcher."""
+        dp, wm = full_dispatcher
         set_global_dispatcher(dp)
 
         @task(type="cpu", timeout=5.0)
@@ -130,18 +146,12 @@ class TestTaskWithDispatcher:
         try:
             future = compute(5)
             assert future.result() == 10
-
-            history = store.get_history()
-            assert len(history) >= 1
-            t = history[-1]
-            assert t.status == TaskStatus.COMPLETED
-            assert t.result == 10
         finally:
             set_global_dispatcher(None)
 
-    def test_async_task_creates_task_in_store(self, full_dispatcher) -> None:
-        """async @task создаёт Task в TaskStore через dispatcher."""
-        dp, wm, store = full_dispatcher
+    def test_async_task_dispatches(self, full_dispatcher) -> None:
+        """async @task dispatch через SmartDispatcher."""
+        dp, wm = full_dispatcher
 
         @task(type="cpu", timeout=5.0)
         async def async_compute(x: int) -> int:
@@ -156,7 +166,7 @@ class TestTaskWithDispatcher:
 
     def test_task_status_transitions(self, full_dispatcher) -> None:
         """Task проходит все статусы: PENDING → RUNNING → COMPLETED."""
-        dp, wm, store = full_dispatcher
+        dp, wm = full_dispatcher
 
         t = Task.create(module_id="test", fn_name="fn")
         assert t.status == TaskStatus.PENDING
@@ -174,7 +184,7 @@ class TestTaskWithDispatcher:
 
     def test_task_failure_status(self, full_dispatcher) -> None:
         """Task с ошибкой: PENDING → RUNNING → FAILED."""
-        dp, wm, store = full_dispatcher
+        dp, wm = full_dispatcher
 
         t = Task.create(module_id="test", fn_name="fn")
         t.start()
@@ -240,7 +250,7 @@ class TestWriteLock:
 
     def test_write_lock_manual_acquire_release(self, fake_dispatcher) -> None:
         """Ручное управление write-lock: acquire_lock/release_lock."""
-        dp, wm = fake_dispatcher
+        dp, wm, tp = fake_dispatcher
 
         dp.acquire_lock()
         try:
@@ -430,20 +440,7 @@ class TestDbTransaction:
 
 
 class TestMetrics:
-    """Проверка: метрики корректно инкрементируются."""
-
-    def test_metrics_returns_copy(self, fake_dispatcher) -> None:
-        """metrics возвращает копию, не оригинал."""
-        dp, wm = fake_dispatcher
-
-        m1 = dp.metrics
-        dp.dispatch(lambda: None)
-        m2 = dp.metrics
-
-        # m1 не изменился (это была копия на момент вызова)
-        # lambda: None → UNKNOWN → "unknown"
-        assert m1["unknown"] == 0
-        assert m2["unknown"] == 1
+    """Проверка: метрики корректно инкрементируются через Prometheus."""
 
     def test_task_type_to_metric_key_all_types(self) -> None:
         """_task_type_to_metric_key: все типы маппятся корректно."""
@@ -491,9 +488,9 @@ class TestISmartDispatcherInterface:
         dp = SmartDispatcher(wm)
 
         assert hasattr(dp, "dispatch")
+        assert hasattr(dp, "dispatch_async")
         assert hasattr(dp, "acquire_lock")
         assert hasattr(dp, "release_lock")
-        assert hasattr(dp, "metrics")
 
 
 # ── 9. Regression: import errors в тестах ──

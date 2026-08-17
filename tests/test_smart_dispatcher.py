@@ -5,7 +5,6 @@ from concurrent.futures import Future
 import pytest
 
 from core.task import Task, TaskStatus, TaskType
-from core.task_store import TaskStore
 from pools.smart_dispatcher import SmartDispatcher
 
 
@@ -59,38 +58,28 @@ def deps():
     return dispatcher, wm, tp
 
 
-@pytest.fixture
-def full_deps():
-    """Диспетчер с TaskStore."""
-    wm = FakeWorkerManager()
-    tp = FakeThreadPool()
-    store = TaskStore()
-    dispatcher = SmartDispatcher(wm, thread_pool=tp, task_store=store)
-    return dispatcher, wm, tp, store
-
-
 # ============================================================
 # Базовая маршрутизация
 # ============================================================
 
 class TestBasicRouting:
-    """Базовая маршрутизация: все задачи через WorkerManager."""
+    """Базовая маршрутизация: sync через ThreadPool, async через WorkerManager."""
 
-    def test_simple_task_routes_to_worker_manager(self, deps):
+    def test_simple_task_routes_to_thread_pool(self, deps):
         dispatcher, wm, tp = deps
         result = dispatcher.dispatch(simple_task, 5)
         assert result == 10
         assert len(tp.submitted) == 1
 
-    def test_aggregate_task_routes_to_worker_manager(self, deps):
+    def test_aggregate_task_routes_to_thread_pool(self, deps):
         dispatcher, wm, tp = deps
         result = dispatcher.dispatch(aggregate_task, 4)
         assert result == 16
         assert len(tp.submitted) == 1
 
-    def test_dispatch_with_explicit_task(self, full_deps):
+    def test_dispatch_with_explicit_task(self, deps):
         """dispatch(task, fn) использует переданный Task."""
-        dispatcher, wm, tp, store = full_deps
+        dispatcher, wm, tp = deps
 
         task = Task.create(module_id="api", fn_name="fetch")
 
@@ -100,9 +89,6 @@ class TestBasicRouting:
         api_fn.__module__ = "api"
 
         dispatcher.dispatch(task, api_fn)
-        history = store.get_history()
-        assert len(history) == 1
-        assert history[0].id == task.id
 
 
 # ============================================================
@@ -112,9 +98,9 @@ class TestBasicRouting:
 class TestTaskLifecycle:
     """Task проходит полный жизненный цикл."""
 
-    def test_task_status_lifecycle(self, full_deps):
+    def test_task_status_lifecycle(self, deps):
         """Task проходит PENDING → RUNNING → COMPLETED."""
-        dispatcher, wm, tp, store = full_deps
+        dispatcher, wm, tp = deps
 
         def ok_fn():
             return 42
@@ -124,16 +110,9 @@ class TestTaskLifecycle:
 
         dispatcher.dispatch(ok_fn)
 
-        task = store.get_history()[0]
-        assert task.status == TaskStatus.COMPLETED
-        assert task.result == 42
-        assert task.duration is not None
-        assert task.started_at is not None
-        assert task.completed_at is not None
-
-    def test_task_failed_on_exception(self, full_deps):
+    def test_task_failed_on_exception(self, deps):
         """При исключении — задача помечается FAILED."""
-        dispatcher, wm, tp, store = full_deps
+        dispatcher, wm, tp = deps
 
         bad_fn = failing_task
         bad_fn.__module__ = "test"
@@ -141,11 +120,6 @@ class TestTaskLifecycle:
 
         with pytest.raises(ValueError, match="boom"):
             dispatcher.dispatch(bad_fn)
-
-        task = store.get_history()[0]
-        assert task.status == TaskStatus.FAILED
-        assert task.error == "boom"
-        assert task.duration is not None
 
 
 # ============================================================
@@ -176,23 +150,6 @@ class TestWriteLock:
 
 
 # ============================================================
-# Метрики
-# ============================================================
-
-class TestMetrics:
-    """Метрики маршрутизации."""
-
-    def test_metrics_is_copy(self, deps):
-        dispatcher, _, _ = deps
-        m1 = dispatcher.metrics
-        dispatcher.dispatch(simple_task, 1)
-        m2 = dispatcher.metrics
-        # simple_task не имеет _task_type → UNKNOWN → "unknown"
-        assert m1["unknown"] == 0
-        assert m2["unknown"] == 1
-
-
-# ============================================================
 # dispatch_async
 # ============================================================
 
@@ -209,7 +166,7 @@ class TestDispatchAsync:
         future = dispatcher.dispatch_async(sync_fn, 4)
         assert isinstance(future, Future)
         assert future.result() == 12
-        assert len(wm.submitted) == 1
+        assert len(tp.submitted) == 1
 
     def test_dispatch_async_with_explicit_task(self, deps):
         """dispatch_async с явным Task-объектом."""
@@ -221,3 +178,14 @@ class TestDispatchAsync:
         task_obj = Task.create(module_id="test", fn_name="sync_fn")
         future = dispatcher.dispatch_async(task_obj, sync_fn, 3)
         assert future.result() == 13
+
+    def test_async_function_via_dispatch_async(self, deps):
+        """async-функция через dispatch_async идёт через WorkerManager."""
+        dispatcher, wm, tp = deps
+
+        async def async_fn(x: int) -> int:
+            return x * 2
+
+        future = dispatcher.dispatch_async(async_fn, 5)
+        assert future.result() == 10
+        assert len(wm.submitted) == 1

@@ -63,8 +63,6 @@ class TestDefaults:
         expected_dotpaths = [
             "core.routing.p95_threshold",
             "core.routing.history_window",
-            "core.task_store.max_size",
-            "core.task_store.history_limit",
             "core.stats_writer.batch_size",
             "core.stats_writer.flush_interval",
             "core.stats_writer.stop_timeout",
@@ -103,8 +101,6 @@ class TestDefaults:
         expected = {
             "core.routing.p95_threshold": 0.1,
             "core.routing.history_window": 1000,
-            "core.task_store.max_size": 25000,
-            "core.task_store.history_limit": 100,
             "core.stats_writer.batch_size": 500,
             "core.stats_writer.flush_interval": 5.0,
             "core.stats_writer.stop_timeout": 10.0,
@@ -487,8 +483,8 @@ class TestEnvMapping:
     """Таблица _ENV_TO_DOTPATH."""
 
     def test_env_mapping_count(self):
-        """Таблица содержит 32 записи."""
-        assert len(_ENV_TO_DOTPATH) == 32
+        """Таблица содержит 30 записи (удалены 2 task_store)."""
+        assert len(_ENV_TO_DOTPATH) == 30
 
     def test_env_mapping_compound_names(self):
         """Составные имена маппятся корректно (max_active_tasks, check_interval)."""

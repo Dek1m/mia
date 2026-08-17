@@ -12,7 +12,6 @@ import pytest
 from core.database import Database
 from core.task import Task, TaskStatus, TaskType
 from core.task_decorator import task
-from core.task_store import TaskStore
 from pools.smart_dispatcher import SmartDispatcher
 
 
@@ -99,10 +98,9 @@ class TestFullCycle:
     """E2E: полный жизненный цикл задачи через все компоненты."""
 
     def test_full_pipeline(self):
-        """Task -> dispatch -> execute -> stats."""
-        store = TaskStore()
+        """Task -> dispatch -> execute."""
         wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(wm, task_store=store)
+        dispatcher = SmartDispatcher(wm)
 
         def get_user(user_id: str) -> dict:
             return {"id": user_id, "name": "Alice"}
@@ -110,24 +108,13 @@ class TestFullCycle:
         get_user.__module__ = "db"
         get_user.__name__ = "get_user"
 
-        dispatcher.dispatch(get_user, "42")
-
-        history = store.get_history()
-        assert len(history) == 1
-        t = history[0]
-
-        assert t.status == TaskStatus.COMPLETED
-        assert t.result == {"id": "42", "name": "Alice"}
-        assert t.started_at is not None
-        assert t.completed_at is not None
-        assert t.duration is not None
-        assert t.duration >= 0
+        result = dispatcher.dispatch(get_user, "42")
+        assert result == {"id": "42", "name": "Alice"}
 
     def test_full_pipeline_with_explicit_task(self):
-        """Явный Task -> dispatch -> execute -> stats."""
-        store = TaskStore()
+        """Явный Task -> dispatch -> execute."""
         wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(wm, task_store=store)
+        dispatcher = SmartDispatcher(wm)
 
         t = Task.create(module_id="api", fn_name="fetch_data")
 
@@ -137,18 +124,13 @@ class TestFullCycle:
         api_fn.__module__ = "api"
         api_fn.__name__ = "fetch_data"
 
-        dispatcher.dispatch(t, api_fn, "https://example.com")
-
-        found = store.get(t.id)
-        assert found is not None
-        assert found.status == TaskStatus.COMPLETED
-        assert found.result == "data from https://example.com"
+        result = dispatcher.dispatch(t, api_fn, "https://example.com")
+        assert result == "data from https://example.com"
 
     def test_full_pipeline_failure(self):
-        """Задача падает -> FAILED + error в истории."""
-        store = TaskStore()
+        """Задача падает -> исключение пробрасывается."""
         wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(wm, task_store=store)
+        dispatcher = SmartDispatcher(wm)
 
         def bad_fn():
             raise ValueError("connection timeout")
@@ -159,26 +141,17 @@ class TestFullCycle:
         with pytest.raises(ValueError, match="connection timeout"):
             dispatcher.dispatch(bad_fn)
 
-        t = store.get_history()[0]
-        assert t.status == TaskStatus.FAILED
-        assert t.error == "connection timeout"
-        assert t.duration is not None
-
     def test_full_pipeline_multiple_tasks(self):
-        """Несколько задач подряд — все корректно в истории."""
-        store = TaskStore()
+        """Несколько задач подряд — все корректно выполняются."""
         wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(wm, task_store=store)
+        dispatcher = SmartDispatcher(wm)
 
         for i in range(10):
             fn = lambda x, i=i: x + i
             fn.__module__ = "db"
             fn.__name__ = f"task_{i}"
-            dispatcher.dispatch(fn, i)
-
-        history = store.get_history()
-        assert len(history) == 10
-        assert all(t.status == TaskStatus.COMPLETED for t in history)
+            result = dispatcher.dispatch(fn, i)
+            assert result == i + i
 
 
 # ============================================================
@@ -187,53 +160,19 @@ class TestFullCycle:
 
 
 class TestOverflowRingBuffer:
-    """E2E: ring buffer отбрасывает старые задачи при переполнении."""
+    """E2E: ring buffer отбрасывает старые задачи при переполнении — удалён вместе с TaskStore."""
 
     def test_overflow_25001_tasks(self):
-        """25001 задача -> в history только последние 25000."""
-        store = TaskStore(max_size=25000)
+        """Проверка что SmartDispatcher обрабатывает много задач без ошибок."""
+        wm = FakeWorkerManager()
+        dispatcher = SmartDispatcher(wm)
 
-        for i in range(25001):
-            t = Task.create(module_id="db", fn_name=f"task_{i}")
-            store.add(t)
-            store.complete(t)
-
-        stats = store.stats()
-        assert stats["history_size"] == 25000
-        assert stats["completed"] == 25000
-        assert stats["active"] == 0
-
-        history = store.get_history(limit=25000)
-        assert history[0].fn_name == "task_25000"
-        assert history[-1].fn_name == "task_1"
-
-    def test_overflow_preserves_newest(self):
-        """После overflow в истории только новые задачи."""
-        store = TaskStore(max_size=5)
-
-        for i in range(10):
-            t = Task.create(module_id="db", fn_name=f"f{i}")
-            store.add(t)
-            store.complete(t)
-
-        history = store.get_history(limit=100)
-        fn_names = [t.fn_name for t in history]
-        assert fn_names == ["f9", "f8", "f7", "f6", "f5"]
-
-    def test_overflow_active_not_affected(self):
-        """Активные задачи не удаляются при overflow."""
-        store = TaskStore(max_size=3)
-
-        active = Task.create(module_id="db", fn_name="active_task")
-        store.add(active)
-
-        for i in range(10):
-            t = Task.create(module_id="db", fn_name=f"done_{i}")
-            store.add(t)
-            store.complete(t)
-
-        assert store.get(active.id) is active
-        assert active.fn_name == "active_task"
+        for i in range(100):
+            fn = lambda x, i=i: x + i
+            fn.__module__ = "db"
+            fn.__name__ = f"task_{i}"
+            result = dispatcher.dispatch(fn, i)
+            assert result == i + i
 
 
 # ============================================================
@@ -242,88 +181,34 @@ class TestOverflowRingBuffer:
 
 
 class TestConcurrentAddition:
-    """E2E: 10 потоков одновременно добавляют задачи."""
+    """E2E: конкурентное добавление задач через SmartDispatcher."""
 
-    def test_10_threads_concurrent_add(self):
-        """10 потоков x 100 задач = 1000 активных задач."""
-        store = TaskStore()
+    def test_10_threads_concurrent_dispatch(self):
+        """10 потоков x 100 задач = 1000 задач через dispatcher."""
+        wm = FakeWorkerManager()
+        dispatcher = SmartDispatcher(wm)
         errors: list[Exception] = []
         barrier = threading.Barrier(10)
 
-        def add_tasks(thread_id: int):
+        def dispatch_tasks(thread_id: int):
             try:
                 barrier.wait(timeout=5)
                 for i in range(100):
-                    t = Task.create(module_id=f"thread_{thread_id}", fn_name=f"task_{i}")
-                    store.add(t)
+                    fn = lambda x, tid=thread_id, idx=i: x + tid * 100 + idx
+                    fn.__module__ = f"thread_{thread_id}"
+                    fn.__name__ = f"task_{i}"
+                    result = dispatcher.dispatch(fn, i)
+                    assert result == i + thread_id * 100 + i
             except Exception as e:
                 errors.append(e)
 
-        threads = [threading.Thread(target=add_tasks, args=(tid,)) for tid in range(10)]
+        threads = [threading.Thread(target=dispatch_tasks, args=(tid,)) for tid in range(10)]
         for t in threads:
             t.start()
         for t in threads:
             t.join(timeout=10)
 
         assert not errors, f"Errors: {errors}"
-        assert len(store.get_active()) == 1000
-
-    def test_10_threads_concurrent_add_complete(self):
-        """10 потоков конкурентно добавляют и завершают задачи."""
-        store = TaskStore()
-        errors: list[Exception] = []
-
-        def add_and_complete(prefix: str, count: int):
-            try:
-                for i in range(count):
-                    t = Task.create(module_id="db", fn_name=f"{prefix}_{i}")
-                    store.add(t)
-                    store.start(t)
-                    store.complete(t, result=f"{prefix}_{i}")
-            except Exception as e:
-                errors.append(e)
-
-        threads = [
-            threading.Thread(target=add_and_complete, args=(f"t{tid}", 100))
-            for tid in range(10)
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=10)
-
-        assert not errors, f"Errors: {errors}"
-        stats = store.stats()
-        assert stats["active"] == 0
-        assert stats["completed"] == 1000
-
-    def test_10_threads_with_overflow(self):
-        """10 потоков x 3000 задач с max_size=25000 -> overflow."""
-        store = TaskStore(max_size=25000)
-        errors: list[Exception] = []
-
-        def add_tasks(prefix: str, count: int):
-            try:
-                for i in range(count):
-                    t = Task.create(module_id="db", fn_name=f"{prefix}_{i}")
-                    store.add(t)
-                    store.complete(t)
-            except Exception as e:
-                errors.append(e)
-
-        threads = [
-            threading.Thread(target=add_tasks, args=(f"t{tid}", 3000))
-            for tid in range(10)
-        ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
-
-        assert not errors, f"Errors: {errors}"
-        stats = store.stats()
-        assert stats["history_size"] <= 25000
-        assert stats["completed"] == stats["history_size"]
 
 
 # ============================================================
@@ -413,99 +298,62 @@ class TestTaskDecoratorE2E:
 
 
 class TestDatabaseIntegration:
-    """E2E: Database facade создаёт задачи при CRUD-операциях."""
+    """E2E: Database facade работает через SmartDispatcher."""
 
     @pytest.fixture
     def provider(self):
         return InMemoryProvider()
 
     @pytest.fixture
-    def task_store(self):
-        return TaskStore()
-
-    @pytest.fixture
-    def db(self, provider, task_store):
+    def db(self, provider):
         stats_writer = MagicMock()
-        db = Database(task_store=task_store, stats_writer=stats_writer)
+        db = Database(stats_writer=stats_writer)
         db.register_provider("mem", provider, is_default=True)
-        return db, task_store, stats_writer, provider
+        return db, stats_writer, provider
 
-    def test_insert_creates_task(self, db):
-        """insert() создаёт задачу со статусом COMPLETED."""
-        db_facade, task_store, _, _ = db
+    def test_insert(self, db):
+        """insert() работает."""
+        db_facade, _, _ = db
 
         result = db_facade.insert("users", {"name": "Alice"})
         assert result == "1"
 
-        history = task_store.get_history()
-        assert len(history) == 1
-        t = history[0]
-        assert t.fn_name == "insert"
-        assert t.module_id == "database"
-        assert t.task_type == TaskType.DATABASE
-        assert t.status == TaskStatus.COMPLETED
-        assert t.result == "1"
-
-    def test_get_creates_task(self, db):
-        """get() создаёт задачу с результатом."""
-        db_facade, task_store, _, provider = db
+    def test_get(self, db):
+        """get() работает."""
+        db_facade, _, provider = db
         provider._store["users:1"] = {"id": "1", "name": "Bob"}
 
         result = db_facade.get("users", "1")
         assert result == {"id": "1", "name": "Bob"}
 
-        history = task_store.get_history()
-        assert len(history) == 1
-        t = history[0]
-        assert t.fn_name == "get"
-        assert t.status == TaskStatus.COMPLETED
-        assert t.result == {"id": "1", "name": "Bob"}
-
-    def test_update_creates_task(self, db):
-        """update() создаёт задачу."""
-        db_facade, task_store, _, provider = db
+    def test_update(self, db):
+        """update() работает."""
+        db_facade, _, provider = db
         provider._store["users:1"] = {"id": "1", "name": "Alice"}
 
         result = db_facade.update("users", "1", {"name": "Bob"})
         assert result == {"id": "1", "name": "Bob"}
 
-        history = task_store.get_history()
-        assert len(history) == 1
-        t = history[0]
-        assert t.fn_name == "update"
-        assert t.status == TaskStatus.COMPLETED
-
-    def test_delete_creates_task(self, db):
-        """delete() создаёт задачу."""
-        db_facade, task_store, _, provider = db
+    def test_delete(self, db):
+        """delete() работает."""
+        db_facade, _, provider = db
         provider._store["users:1"] = {"id": "1"}
 
         result = db_facade.delete("users", "1")
         assert result is True
 
-        history = task_store.get_history()
-        assert len(history) == 1
-        t = history[0]
-        assert t.fn_name == "delete"
-        assert t.status == TaskStatus.COMPLETED
-
     def test_crud_full_cycle(self, db):
         """Полный CRUD-цикл: insert -> get -> update -> delete."""
-        db_facade, task_store, _, _ = db
+        db_facade, _, _ = db
 
         id1 = db_facade.insert("users", {"name": "Alice"})
-        db_facade.get("users", id1)
-        db_facade.update("users", id1, {"name": "Bob"})
-        db_facade.delete("users", id1)
+        assert db_facade.get("users", id1) is not None
+        assert db_facade.update("users", id1, {"name": "Bob"}) is not None
+        assert db_facade.delete("users", id1) is True
 
-        history = task_store.get_history()
-        assert len(history) == 4
-        fn_names = [t.fn_name for t in history]
-        assert fn_names == ["delete", "update", "get", "insert"]
-
-    def test_error_creates_failed_task(self, db):
-        """Ошибка в провайдере -> FAILED задача."""
-        db_facade, task_store, _, _ = db
+    def test_error_propagation(self, db):
+        """Ошибка в провайдере пробрасывается."""
+        db_facade, _, _ = db
 
         class BrokenProvider:
             def get(self, table, id):
@@ -517,37 +365,6 @@ class TestDatabaseIntegration:
 
         with pytest.raises(RuntimeError, match="DB connection lost"):
             db_facade.get("t", "1")
-
-        history = task_store.get_history()
-        assert len(history) == 1
-        t = history[0]
-        assert t.status == TaskStatus.FAILED
-        assert "DB connection lost" in t.error
-
-    def test_stats_writer_receives_tasks(self, db):
-        """StatsBatchWriter.add() вызывается для каждой операции."""
-        db_facade, _, stats_writer, provider = db
-        provider._store["users:1"] = {"id": "1"}
-
-        db_facade.insert("users", {"name": "Alice"})
-        db_facade.get("users", "1")
-
-        assert stats_writer.add.call_count == 2
-        for call in stats_writer.add.call_args_list:
-            assert isinstance(call[0][0], Task)
-
-    def test_task_has_timing(self, db):
-        """Задачи имеют корректные тайминги."""
-        db_facade, task_store, _, _ = db
-
-        db_facade.insert("t", {"v": 1})
-        t = task_store.get_history()[0]
-
-        assert t.created_at > 0
-        assert t.started_at is not None
-        assert t.completed_at is not None
-        assert t.duration is not None
-        assert t.duration >= 0
 
     def test_without_task_system_backward_compat(self):
         """Database без Task System работает как раньше."""
@@ -567,6 +384,5 @@ class TestDatabaseIntegration:
         database, task_store, stats_writer = DatabaseFactory.create_with_task_system()
 
         assert isinstance(database, Database)
-        assert isinstance(task_store, TaskStore)
-        assert database._task_store is task_store
+        assert task_store is None
         assert database._stats_writer is stats_writer

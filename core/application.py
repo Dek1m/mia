@@ -117,18 +117,15 @@ class Application:
         self._services.register(IWorkerManager, worker_manager)
 
         # Task System — создаём ДО SmartDispatcher для подключения
-        from core.task_store import TaskStore
         from pools.worker_thread_pool import WorkerThreadPool
 
-        task_store = TaskStore()
         thread_pool = WorkerThreadPool()
         self._thread_pool = thread_pool
 
-        # SmartDispatcher — sync через WorkerManager, async через ThreadPool
+        # SmartDispatcher — sync через ThreadPool, async через WorkerManager
         smart_dispatcher = SmartDispatcher(
             worker_manager,
             thread_pool=thread_pool,
-            task_store=task_store,
         )
         self._services.register(ISmartDispatcher, smart_dispatcher)
 
@@ -137,12 +134,11 @@ class Application:
         set_global_dispatcher(smart_dispatcher)
 
         database, _, stats_writer = DatabaseFactory.create_with_task_system(
-            cache=cache, dispatcher=smart_dispatcher, task_store=task_store,
+            cache=cache, dispatcher=smart_dispatcher,
         )
         self._services.register(IDatabase, database)
 
         self._smart_dispatcher = smart_dispatcher
-        self._task_store = task_store
         self._stats_writer = stats_writer
 
         # Module Registry
@@ -253,11 +249,6 @@ class Application:
     def smart_dispatcher(self) -> SmartDispatcher:
         """Доступ к SmartDispatcher."""
         return self._smart_dispatcher
-
-    @property
-    def task_store(self) -> Any:
-        """Доступ к TaskStore."""
-        return self._task_store
 
     @property
     def stats_writer(self) -> Any:

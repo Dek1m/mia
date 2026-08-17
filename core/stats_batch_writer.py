@@ -12,12 +12,6 @@ from core.task import Task
 
 log = get_logger(__name__)
 
-# Прямой импорт метрик
-try:
-    from monitoring.metrics import task_store_flush_total as _flush_counter
-except ImportError:
-    _flush_counter = None
-
 
 class StatsBatchWriter:
     """Батчевый писатель статистики задач.
@@ -97,8 +91,6 @@ class StatsBatchWriter:
         try:
             await self._flush_history(batch)
             await self._flush_stats(batch)
-            if _flush_counter is not None:
-                _flush_counter.inc()
             log.debug("StatsBatchWriter flush completed", extra={"batch_size": len(batch)})
         except Exception as e:
             log.error(

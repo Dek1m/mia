@@ -24,8 +24,6 @@ log = logging.getLogger(__name__)
 _ENV_TO_DOTPATH: dict[str, str] = {
     "MIA_ROUTING_P95_THRESHOLD": "core.routing.p95_threshold",
     "MIA_ROUTING_HISTORY_WINDOW": "core.routing.history_window",
-    "MIA_TASK_STORE_MAX_SIZE": "core.task_store.max_size",
-    "MIA_TASK_STORE_HISTORY_LIMIT": "core.task_store.history_limit",
     "MIA_STATS_WRITER_BATCH_SIZE": "core.stats_writer.batch_size",
     "MIA_STATS_WRITER_FLUSH_INTERVAL": "core.stats_writer.flush_interval",
     "MIA_STATS_WRITER_STOP_TIMEOUT": "core.stats_writer.stop_timeout",
@@ -61,8 +59,6 @@ _NUMERIC_KEYS: set[str] = {
     "core.routing.p95_threshold",
     "core.routing.history_window",
     "core.routing.stats_update_interval",
-    "core.task_store.max_size",
-    "core.task_store.history_limit",
     "core.stats_writer.batch_size",
     "core.stats_writer.flush_interval",
     "core.stats_writer.stop_timeout",
@@ -166,10 +162,6 @@ class MiaConfig:
                     "p95_threshold": 0.1,
                     "history_window": 1000,
                     "stats_update_interval": 100,
-                },
-                "task_store": {
-                    "max_size": 25000,
-                    "history_limit": 100,
                 },
                 "stats_writer": {
                     "batch_size": 500,

@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from core.task import Task, TaskStatus, TaskType
-from core.task_store import TaskStore
 from core.task_decorator import set_global_dispatcher
 from modules.db.provider import db_method, DatabaseProvider
 from pools.smart_dispatcher import SmartDispatcher

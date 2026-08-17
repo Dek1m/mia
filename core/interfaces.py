@@ -162,12 +162,12 @@ class ISmartDispatcher(ABC):
 
     @abstractmethod
     def dispatch(self, first: Any, *args: Any, **kwargs: Any) -> Any:
-        """Маршрутизировать и выполнить задачу (sync)."""
+        """Маршрутизировать и выполнить задачу (blocking)."""
         ...
 
     @abstractmethod
     def dispatch_async(self, first: Any, *args: Any, **kwargs: Any) -> Any:
-        """Маршрутизировать задачу асинхронно.
+        """Маршрутизировать задачу (non-blocking, возвращает Future).
 
         Args:
             first: Task-объект или функция для выполнения.
@@ -187,12 +187,6 @@ class ISmartDispatcher(ABC):
     @abstractmethod
     def release_lock(self) -> None:
         """Освободить блокировку записей."""
-        ...
-
-    @property
-    @abstractmethod
-    def metrics(self) -> dict[str, int]:
-        """Количество выполненных задач по типам."""
         ...
 
 

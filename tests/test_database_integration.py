@@ -161,32 +161,26 @@ class TestFullLifecycle:
         """CRUD операции через Application.database со SmartDispatcher + ThreadPool."""
         app.database.register_provider("mem", provider, is_default=True)
 
-        # Insert → Future (SmartDispatcher → ThreadPool)
-        id_future = app.database.insert("users", {"name": "Alice", "age": 30})
-        assert isinstance(id_future, Future)
-        id_ = id_future.result(timeout=5)
+        # Insert → значение (dispatch блокируется)
+        id_ = app.database.insert("users", {"name": "Alice", "age": 30})
+        assert isinstance(id_, str)
 
-        # Get → Future
-        get_future = app.database.get("users", id_)
-        assert isinstance(get_future, Future)
-        record = get_future.result(timeout=5)
+        # Get → значение
+        record = app.database.get("users", id_)
         assert record is not None
         assert record["name"] == "Alice"
         assert record["age"] == 30
 
-        # Update → Future
-        update_future = app.database.update("users", id_, {"age": 31})
-        updated = update_future.result(timeout=5)
+        # Update → значение
+        updated = app.database.update("users", id_, {"age": 31})
         assert updated is not None
         assert updated["age"] == 31
 
-        # Delete → Future
-        del_future = app.database.delete("users", id_)
-        assert del_future.result(timeout=5) is True
+        # Delete → значение
+        assert app.database.delete("users", id_) is True
 
         # Повторный Get → None
-        get2_future = app.database.get("users", id_)
-        assert get2_future.result(timeout=5) is None
+        assert app.database.get("users", id_) is None
 
     def test_multiple_providers_through_application(self, app: Application) -> None:
         """Несколько провайдеров — каждый работает через Database."""
@@ -196,13 +190,13 @@ class TestFullLifecycle:
         app.database.register_provider("db2", p2)
 
         # Insert в db1
-        id1 = app.database.insert("items", {"source": "db1"}).result(timeout=5)
+        id1 = app.database.insert("items", {"source": "db1"})
         # Insert в db2
-        id2 = app.database.insert("items", {"source": "db2"}).result(timeout=5)
+        id2 = app.database.insert("items", {"source": "db2"})
 
         # Get из разных провайдеров
-        r1 = app.database.get("items", id1).result(timeout=5)
-        r2 = app.database.get("items", id2).result(timeout=5)
+        r1 = app.database.get("items", id1)
+        r2 = app.database.get("items", id2)
         assert r1["source"] == "db1"
         assert r2["source"] == "db2"
 
@@ -407,21 +401,9 @@ class TestSmartDispatcherRouting:
         fn = self._make_fn("write", lock=True)
         result = disp.dispatch(fn, 10)
         assert result == 20
-        # _db_type не влияет на метрики — задача идёт через ThreadPool как UNKNOWN
-        assert disp.metrics["unknown"] == 1
-
-    def test_metrics_are_copy(self, dispatcher: tuple) -> None:
-        """metrics возвращает копию, не мутабельную ссылку."""
-        disp, _, _ = dispatcher
-        m1 = disp.metrics
-        disp.dispatch(self._make_fn("read"), 1)
-        m2 = disp.metrics
-        # _db_type не влияет на метрики — задача идёт через ThreadPool как UNKNOWN
-        assert m1["unknown"] == 0
-        assert m2["unknown"] == 1
 
     def test_dispatch_multiple_types(self, dispatcher: tuple) -> None:
-        """Смешанная маршрутизация: все задачи идут через ThreadPool."""
+        """Смешанная маршрутизация: sync через ThreadPool."""
         disp, wm, tp = dispatcher
         read_fn = self._make_fn("read")
         write_fn = self._make_fn("write")
@@ -431,9 +413,8 @@ class TestSmartDispatcherRouting:
         disp.dispatch(write_fn, 2)
         disp.dispatch(agg_fn, 3)
 
-        m = disp.metrics
-        # Все функции без _task_type → UNKNOWN
-        assert m["unknown"] == 3
+        # Все sync-функции идут через ThreadPool
+        assert len(tp.submitted) == 3
 
     def test_worker_manager_receives_correct_args(self, dispatcher: tuple) -> None:
         """ThreadPool получает правильные аргументы."""
@@ -531,7 +512,7 @@ class TestObservabilityMetrics:
 
         before_ops = self._counter_value(database_operations_total, operation="insert", status="ok")
 
-        app.database.insert("t", {"x": 1}).result(timeout=5)
+        app.database.insert("t", {"x": 1})
 
         after_ops = self._counter_value(database_operations_total, operation="insert", status="ok")
         assert after_ops > before_ops
