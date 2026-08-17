@@ -127,10 +127,13 @@ class SmartDispatcher:
 
         try:
             if inspect.iscoroutinefunction(fn):
-                # Async → WorkerManager (процесс с asyncio.run)
-                pool_result = self._worker_manager.submit(
-                    _run_async_in_process, fn, call_args, kwargs,
-                )
+                # Async → ThreadPool (asyncio.run в потоке)
+                if self._thread_pool is not None:
+                    pool_result = self._thread_pool.submit(
+                        _run_async_in_process, fn, call_args, kwargs,
+                    )
+                else:
+                    pool_result = _run_async_in_process(fn, call_args, kwargs)
             else:
                 # Sync → ThreadPool (blocking)
                 if self._thread_pool is not None:
