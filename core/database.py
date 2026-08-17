@@ -179,11 +179,11 @@ class Database(IDatabase):
             limit = MiaConfig.get().get_value("core.database.list_limit", 100)
         return self._delegate("list", table, filters, limit, offset)
 
-    def fetch(self, query: str, *params: Any) -> list[dict]:
-        return self._delegate("fetch", query, *params)
+    async def fetch(self, query: str, *params: Any) -> list[dict]:
+        return await self._delegate("fetch", query, *params)
 
-    def execute(self, query: str, *params: Any) -> str:
-        return self._delegate("execute", query, *params)
+    async def execute(self, query: str, *params: Any) -> str:
+        return await self._delegate("execute", query, *params)
 
     # === Provider stubs с метаданными для SmartDispatcher ===
 
