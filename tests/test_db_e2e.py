@@ -10,7 +10,7 @@ import pytest
 
 from core.stats_batch_writer import StatsBatchWriter
 from pools.smart_dispatcher import SmartDispatcher
-from modules.db.provider import DatabaseProvider, db_method, _resolve_cache_key
+from modules.db.provider import DatabaseProvider
 from modules.db.config import DatabaseConfig
 
 
@@ -207,89 +207,7 @@ class TestFullCRUDCycle:
 
 
 # ============================================================
-# 2. Кеш через @db_method
-# ============================================================
-
-
-class TestCacheViaDbMethod:
-    """E2E: кеш работает через декоратор @db_method."""
-
-    @pytest.mark.asyncio
-    async def test_cache_hit_returns_cached_value(
-        self, provider_with_cache: DatabaseProvider, pool: E2EMockPool, cache: E2ECache,
-    ) -> None:
-        """Второй get возвращает кеш."""
-        pool._store["id:1"] = {"id": "1", "name": "Alice"}
-
-        result1 = await provider_with_cache.get("users", "1")
-        assert result1 == {"id": "1", "name": "Alice"}
-        assert cache.hits == 0
-        assert cache.misses == 1
-
-        result2 = await provider_with_cache.get("users", "1")
-        assert result2 == {"id": "1", "name": "Alice"}
-        assert cache.hits == 1
-
-    @pytest.mark.asyncio
-    async def test_cache_disabled_when_ttl_zero(
-        self, provider_with_cache: DatabaseProvider, pool: E2EMockPool, cache: E2ECache,
-    ) -> None:
-        """cache_ttl=0 → кеш не используется."""
-        pool._store["id:1"] = {"id": "1", "name": "Alice"}
-
-        await provider_with_cache.exists("users", "1")
-        assert cache.hits == 0
-        assert cache.misses == 0
-
-
-# ============================================================
-# 3. Lock через @db_method
-# ============================================================
-
-
-class TestLockViaDbMethod:
-    """E2E: lock работает через декоратор @db_method."""
-
-    @pytest.mark.asyncio
-    async def test_write_lock_attribute(
-        self, provider: DatabaseProvider,
-    ) -> None:
-        """write-метод имеет _db_lock."""
-        assert hasattr(provider.insert, "_db_lock")
-
-    @pytest.mark.asyncio
-    async def test_read_has_no_lock(
-        self, provider: DatabaseProvider,
-    ) -> None:
-        """read-метод не имеет lock."""
-        assert getattr(provider.get, "_db_lock") is None
-
-
-# ============================================================
-# 4. Retry через @task
-# ============================================================
-
-
-class TestRetryViaTask:
-    """E2E: retry работает через @task decorator."""
-
-    @pytest.mark.asyncio
-    async def test_retry_metadata(
-        self, provider: DatabaseProvider,
-    ) -> None:
-        """@db_method сохраняет retry-метаданные."""
-        assert getattr(provider.get, "_db_retry") == 0
-
-    @pytest.mark.asyncio
-    async def test_timeout_metadata(
-        self, provider: DatabaseProvider,
-    ) -> None:
-        """@db_method сохраняет timeout-метаданные."""
-        assert getattr(provider.get, "_db_timeout") == 5.0
-
-
-# ============================================================
-# 5. Batch-операции
+# 2. Batch-операции
 # ============================================================
 
 

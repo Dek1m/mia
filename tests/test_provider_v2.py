@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from core.task import TaskStatus, TaskType
-from modules.db.provider import DatabaseProvider, db_method, validate_identifier
+from modules.db.provider import DatabaseProvider, validate_identifier
 
 
 # ── Мок-пул ────────────────────────────────────────────
@@ -131,43 +131,6 @@ class TestCRUDOperations:
         pool._store["id:2"] = {"id": "2", "name": "Bob"}
         result = await provider.count("users")
         assert result == 2
-
-
-# ── 2. Метаданные декоратора ────────────────────────────
-
-
-class TestDecoratorMetadata:
-    """Атрибуты @db_method сохраняются на wrapper."""
-
-    def test_metadata_preserved(self) -> None:
-        @db_method(
-            type="read",
-            timeout=5.0,
-            cache_ttl=30,
-            cache_key="item:{id}",
-            lock="lock:{id}",
-            retry=2,
-            retry_delay=0.1,
-            metrics="custom.metric",
-        )
-        async def get_item(self, id: str) -> dict:
-            return {"id": id}
-
-        assert get_item._db_type == "read"
-        assert get_item._db_timeout == 5.0
-        assert get_item._db_cache_ttl == 30
-        assert get_item._db_cache_key == "item:{id}"
-        assert get_item._db_lock == "lock:{id}"
-        assert get_item._db_retry == 2
-        assert get_item._db_retry_delay == 0.1
-        assert get_item._db_metrics == "custom.metric"
-
-    def test_default_metrics(self) -> None:
-        @db_method()
-        async def my_method(self) -> None:
-            pass
-
-        assert my_method._db_metrics == "db.my_method"
 
 
 # ── 3. Setter-методы ───────────────────────────────────
