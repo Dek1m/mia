@@ -4,8 +4,8 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "mia"
-version = "0.2.0"
-description = "State Manager with module system and multiprocessing dispatching"
+version = "0.3.0"
+description = "State Manager with module system, multiprocessing dispatching, and WorkerManager"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "Argenta Team"}]
