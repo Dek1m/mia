@@ -12,7 +12,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from argenta_logging import get_logger
-from core.shared_memory import SharedMemoryManager
+from core.shared_memory import SharedMemory
 from monitoring.metrics import (
     worker_manager_active,
     worker_manager_restarts_total,
@@ -103,11 +103,11 @@ class WorkerManager:
         self,
         load_balancer: LoadBalancer | None = None,
         heartbeat_monitor: Any | None = None,
-        shared_memory: SharedMemoryManager | None = None,
+        shared_memory: SharedMemory | None = None,
     ) -> None:
         self._load_balancer = load_balancer or LoadBalancer()
         self._heartbeat_monitor = heartbeat_monitor
-        self._shared_memory = shared_memory or SharedMemoryManager()
+        self._shared_memory = shared_memory or SharedMemory()
         self._workers: dict[int, multiprocessing.Process] = {}
         self._worker_ids: dict[int, int] = {}
         self._worker_states: dict[int, WorkerState] = {}
@@ -131,7 +131,7 @@ class WorkerManager:
         return self._load_balancer
 
     @property
-    def shared_memory(self) -> SharedMemoryManager:
+    def shared_memory(self) -> SharedMemory:
         return self._shared_memory
 
     def start(self, num_workers: int | None = None) -> None:

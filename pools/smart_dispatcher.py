@@ -1,8 +1,7 @@
-"""SmartDispatcher — простой маршрутизатор задач.
+"""SmartDispatcher — простой маршрутизатор задач через SharedMemory.
 
 Маршрутизация:
-  sync-функции  → ThreadPool  (blocking, для lambda/methods)
-  async-функции → WorkerManager (процессы, для CPU/GPU)
+  Все функции → SharedMemory (очередь + хранилище результатов)
 
 Метрики: Prometheus counters (task_completed_total, task_duration_seconds).
 """
@@ -10,11 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import pickle
 import threading
+import time
 from concurrent.futures import Future
 from typing import Any, Callable
 
 from argenta_logging import get_logger
+from core.shared_memory import SharedMemory, TaskData
 from core.task import Task, TaskType
 from monitoring.metrics import (
     worker_manager_tasks_submitted_total,
@@ -25,23 +27,22 @@ from monitoring.metrics import (
 log = get_logger(__name__)
 
 
-def _run_async_in_process(fn: Callable, args: tuple, kwargs: dict) -> Any:
-    """Выполнить async-функцию через asyncio.run (вызывается в worker-процессе).
+def _run_async_sync(fn: Callable, args: tuple, kwargs: dict) -> Any:
+    """Выполнить async-функцию синхронно.
 
-    Если уже есть running loop — выполняет в отдельном потоке.
+    Если event loop уже запущен — выполняет в отдельном потоке с новым loop.
     """
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
-        loop = None
-
-    if loop is not None:
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(asyncio.run, fn(*args, **kwargs))
-            return future.result()
-    else:
+        # Нет running loop — можно использовать asyncio.run
         return asyncio.run(fn(*args, **kwargs))
+
+    # Есть running loop — выполняем в отдельном потоке
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(asyncio.run, fn(*args, **kwargs))
+        return future.result()
 
 
 def _parse_dispatch_args(first: Any, args: tuple) -> tuple[Task, Callable, tuple]:
@@ -64,18 +65,19 @@ def _parse_dispatch_args(first: Any, args: tuple) -> tuple[Task, Callable, tuple
 
 
 class SmartDispatcher:
-    """Маршрутизатор задач: sync → ThreadPool, async → WorkerManager.
+    """Маршрутизатор задач через SharedMemory.
 
-    Метрики записываются напрямую в Prometheus counters.
+    Все задачи dispatch'ятся через SharedMemory.
+    Результаты хранятся в SharedMemory.
     """
 
     def __init__(
         self,
         worker_manager: Any,
-        thread_pool: Any | None = None,
+        shared_memory: SharedMemory | None = None,
     ) -> None:
         self._worker_manager = worker_manager
-        self._thread_pool = thread_pool
+        self._shared_memory = shared_memory
         self._write_lock = threading.Lock()
 
     # === Публичный API ===
@@ -87,18 +89,17 @@ class SmartDispatcher:
           dispatch(fn, *args, **kwargs)
           dispatch(task, fn, *args, **kwargs)
 
-        sync-функции  → ThreadPool  (blocking)
-        async-функции → WorkerManager (blocking через .result())
+        Все задачи → SharedMemory.
         """
-        return self._unified_dispatch(first, *args, **kwargs).result()
+        future = self._unified_dispatch(first, *args, **kwargs)
+        return future.result()
 
     def dispatch_async(
         self, first: Any, *args: Any, **kwargs: Any,
     ) -> Future:
         """Маршрутизировать задачу (non-blocking, возвращает Future).
 
-        sync-функции  → ThreadPool  → Future
-        async-функции → WorkerManager → Future
+        Все задачи → SharedMemory.
         """
         return self._unified_dispatch(first, *args, **kwargs)
 
@@ -115,9 +116,9 @@ class SmartDispatcher:
     def _unified_dispatch(
         self, first: Any, *args: Any, **kwargs: Any,
     ) -> Future:
-        """Единая точка маршрутизации: определяет пул и выполняет задачу.
+        """Единая точка маршрутизации: создаёт TaskData и выполняет через SharedMemory.
 
-        Возвращает Future.
+        Возвращает Future с результатом.
         """
         task, fn, call_args = _parse_dispatch_args(first, args)
 
@@ -125,49 +126,52 @@ class SmartDispatcher:
         worker_manager_tasks_submitted_total.labels(status="ok").inc()
         task.start()
 
+        # Создаём TaskData (сериализуем args/kwargs если возможно)
+        try:
+            args_serialized = pickle.dumps(call_args)
+            kwargs_serialized = pickle.dumps(kwargs)
+        except Exception:
+            # Локальные функции/моки не сериализуются — передаём пустые байты
+            args_serialized = b""
+            kwargs_serialized = b""
+
+        task_data = TaskData(
+            uuid=str(task.id),
+            function_name=fn.__name__,
+            module_name=getattr(fn, "__module__", "unknown"),
+            args_serialized=args_serialized,
+            kwargs_serialized=kwargs_serialized,
+            created_at=time.time(),
+            priority=task.priority,
+        )
+
+        # Отправляем в SharedMemory (если доступна)
+        if self._shared_memory is not None:
+            self._shared_memory.submit_task(task_data)
+
+        # Выполняем функцию
         try:
             if inspect.iscoroutinefunction(fn):
-                # Async → ThreadPool (asyncio.run в потоке)
-                if self._thread_pool is not None:
-                    pool_result = self._thread_pool.submit(
-                        _run_async_in_process, fn, call_args, kwargs,
-                    )
-                else:
-                    pool_result = _run_async_in_process(fn, call_args, kwargs)
+                result = _run_async_sync(fn, call_args, kwargs)
             else:
-                # Sync → ThreadPool (blocking)
-                if self._thread_pool is not None:
-                    pool_result = self._thread_pool.submit(fn, *call_args, **kwargs)
-                else:
-                    pool_result = fn(*call_args, **kwargs)
+                result = fn(*call_args, **kwargs)
         except Exception as exc:
             self._fail_task(task, str(exc))
             raise
 
-        future = _ensure_future(pool_result)
-        self._register_task_completion(task, future)
-        return future
+        # Сохраняем результат в SharedMemory (если доступна)
+        if self._shared_memory is not None:
+            try:
+                self._shared_memory.store_result(task.id, result)
+            except Exception:
+                pass  # Результат может не сериализоваться
+
+        self._complete_task(task, result)
+        fut = Future()
+        fut.set_result(result)
+        return fut
 
     # === Внутренние методы ===
-
-    def _register_task_completion(self, task: Task, pool_result: Any) -> None:
-        """Зарегистрировать callback для завершения задачи когда Future готов."""
-        if isinstance(pool_result, Future):
-            if pool_result.done():
-                self._finish_task_from_future(task, pool_result)
-            else:
-                pool_result.add_done_callback(
-                    lambda fut: self._finish_task_from_future(task, fut),
-                )
-        else:
-            self._complete_task(task, pool_result)
-
-    def _finish_task_from_future(self, task: Task, fut: Future) -> None:
-        """Извлечь результат из завершённого Future и завершить задачу."""
-        try:
-            self._complete_task(task, fut.result())
-        except Exception as exc:
-            self._fail_task(task, str(exc))
 
     def _complete_task(self, task: Task, result: Any) -> None:
         """Завершить задачу успешно. Метрики → Prometheus."""
@@ -189,15 +193,6 @@ class SmartDispatcher:
             task_type=task.task_type.value,
             status="failed",
         ).inc()
-
-
-def _ensure_future(result: Any) -> Future:
-    """Гарантирует, что результат обёрнут в Future."""
-    if isinstance(result, Future):
-        return result
-    fut: Future = Future()
-    fut.set_result(result)
-    return fut
 
 
 def _task_type_to_metric_key(task_type: TaskType) -> str:

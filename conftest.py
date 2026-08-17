@@ -34,13 +34,17 @@ def _global_dispatcher():
     даже без Application.startup().
     """
     from core.task_decorator import set_global_dispatcher
+    from core.shared_memory import SharedMemory
     from pools.smart_dispatcher import SmartDispatcher
 
     wm = _FakeWorkerManager()
-    dp = SmartDispatcher(wm)
+    sm = SharedMemory(backend="local", num_blocks=16, block_size=4096)
+    sm.start()
+    dp = SmartDispatcher(wm, shared_memory=sm)
     set_global_dispatcher(dp)
     yield dp
     set_global_dispatcher(None)
+    sm.shutdown()
 
 
 def _register_package(pkg_name: str, module_dir: Path, submodules: list[str] | None = None) -> None:

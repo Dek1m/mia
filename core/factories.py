@@ -98,11 +98,14 @@ class WorkerManagerFactory:
     ) -> IWorkerManager:
         from pools.worker_manager import WorkerManager
         from pools.load_balancer import LoadBalancer
-        from core.shared_memory import SharedMemoryManager
+        from core.shared_memory import SharedMemory
+        if shared_memory is None:
+            shared_memory = SharedMemory()
+            shared_memory.start()
         return WorkerManager(
             load_balancer=load_balancer or LoadBalancer(),
             heartbeat_monitor=heartbeat_monitor,
-            shared_memory=shared_memory or SharedMemoryManager(),
+            shared_memory=shared_memory,
         )
 
 

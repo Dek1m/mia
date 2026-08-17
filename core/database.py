@@ -1,8 +1,10 @@
 """Database facade — делегирует CRUD провайдерам."""
 from __future__ import annotations
 
+import pickle
 import time
 from typing import Any
+from uuid import uuid4
 
 from argenta_logging import get_logger
 from core.interfaces import IDatabase
@@ -28,12 +30,16 @@ class Database(IDatabase):
         cache: Any | None = None,
         dispatcher: Any | None = None,
         stats_writer: Any | None = None,
+        shared_memory: Any | None = None,
+        module_meta: Any | None = None,
     ) -> None:
         self._providers: dict[str, Any] = {}
         self._default_provider: str | None = None
         self._cache = cache
         self._dispatcher = dispatcher
         self._stats_writer = stats_writer
+        self._shared_memory = shared_memory
+        self._module_meta = module_meta
 
     def register_provider(self, name: str, provider: Any, is_default: bool = False) -> None:
         self._providers[name] = provider
@@ -53,20 +59,44 @@ class Database(IDatabase):
 
     def get(self, table: str, id: str) -> dict | None:
         cache_key = f"db:{table}:{id}"
-        if self._cache is not None:
+
+        # Кеш из ModuleMeta (TTL-кеш, если method прописан в cache_rules)
+        if self._module_meta and "get" in self._module_meta.cache_rules:
+            ttl = self._module_meta.cache_rules["get"]
+            cached = self._cache.get(cache_key) if self._cache else None
+            if cached is not None:
+                database_cache_hits_total.labels(level="l0").inc()
+                log.debug("cache_hit", extra={"table": table, "id": id})
+                return cached
+            database_cache_misses_total.inc()
+        elif self._cache is not None:
             cached = self._cache.get(cache_key)
             if cached is not None:
                 database_cache_hits_total.labels(level="l0").inc()
                 log.debug("cache_hit", extra={"table": table, "id": id})
                 return cached
             database_cache_misses_total.inc()
+
         start = time.monotonic()
         try:
-            result = (
-                self._dispatcher.dispatch(self._provider_get, table, id)
-                if self._dispatcher is not None
-                else self._delegate("get", table, id)
-            )
+            # Dispatch через SharedMemory
+            if self._shared_memory is not None:
+                from core.shared_memory import TaskData
+                task_data = TaskData(
+                    uuid=str(uuid4()),
+                    function_name="get",
+                    module_name="db",
+                    args_serialized=pickle.dumps((table, id)),
+                    kwargs_serialized=pickle.dumps({}),
+                    created_at=time.time(),
+                )
+                self._shared_memory.submit_task(task_data)
+                result = self._shared_memory.get_result(task_data.uuid)
+            elif self._dispatcher is not None:
+                result = self._dispatcher.dispatch(self._provider_get, table, id)
+            else:
+                result = self._delegate("get", table, id)
+
             database_operations_total.labels(operation="get", status="ok").inc()
             log.debug("db_get", extra={"table": table, "id": id, "found": result is not None})
         except Exception as e:
@@ -75,26 +105,49 @@ class Database(IDatabase):
             raise
         finally:
             database_operation_duration_seconds.labels(operation="get").observe(time.monotonic() - start)
+
         if result is not None and self._cache is not None:
             self._cache.set(cache_key, result)
         return result
 
     def get_by_field(self, table: str, field: str, value: Any) -> dict | None:
         cache_key = f"db:{table}:{field}:{value}"
-        if self._cache is not None:
+
+        # Кеш из ModuleMeta
+        if self._module_meta and "get_by_field" in self._module_meta.cache_rules:
+            cached = self._cache.get(cache_key) if self._cache else None
+            if cached is not None:
+                database_cache_hits_total.labels(level="l0").inc()
+                log.debug("cache_hit", extra={"table": table, "field": field})
+                return cached
+            database_cache_misses_total.inc()
+        elif self._cache is not None:
             cached = self._cache.get(cache_key)
             if cached is not None:
                 database_cache_hits_total.labels(level="l0").inc()
                 log.debug("cache_hit", extra={"table": table, "field": field})
                 return cached
             database_cache_misses_total.inc()
+
         start = time.monotonic()
         try:
-            result = (
-                self._dispatcher.dispatch(self._provider_get_by_field, table, field, value)
-                if self._dispatcher is not None
-                else self._delegate("get_by_field", table, field, value)
-            )
+            if self._shared_memory is not None:
+                from core.shared_memory import TaskData
+                task_data = TaskData(
+                    uuid=str(uuid4()),
+                    function_name="get_by_field",
+                    module_name="db",
+                    args_serialized=pickle.dumps((table, field, value)),
+                    kwargs_serialized=pickle.dumps({}),
+                    created_at=time.time(),
+                )
+                self._shared_memory.submit_task(task_data)
+                result = self._shared_memory.get_result(task_data.uuid)
+            elif self._dispatcher is not None:
+                result = self._dispatcher.dispatch(self._provider_get_by_field, table, field, value)
+            else:
+                result = self._delegate("get_by_field", table, field, value)
+
             database_operations_total.labels(operation="get_by_field", status="ok").inc()
             log.debug("db_get_by_field", extra={"table": table, "field": field, "found": result is not None})
         except Exception as e:
@@ -103,6 +156,7 @@ class Database(IDatabase):
             raise
         finally:
             database_operation_duration_seconds.labels(operation="get_by_field").observe(time.monotonic() - start)
+
         if result is not None and self._cache is not None:
             self._cache.set(cache_key, result)
         return result
@@ -110,11 +164,23 @@ class Database(IDatabase):
     def insert(self, table: str, data: dict) -> str:
         start = time.monotonic()
         try:
-            result = (
-                self._dispatcher.dispatch(self._provider_insert, table, data)
-                if self._dispatcher is not None
-                else self._delegate("insert", table, data)
-            )
+            if self._shared_memory is not None:
+                from core.shared_memory import TaskData
+                task_data = TaskData(
+                    uuid=str(uuid4()),
+                    function_name="insert",
+                    module_name="db",
+                    args_serialized=pickle.dumps((table, data)),
+                    kwargs_serialized=pickle.dumps({}),
+                    created_at=time.time(),
+                )
+                self._shared_memory.submit_task(task_data)
+                result = self._shared_memory.get_result(task_data.uuid)
+            elif self._dispatcher is not None:
+                result = self._dispatcher.dispatch(self._provider_insert, table, data)
+            else:
+                result = self._delegate("insert", table, data)
+
             database_operations_total.labels(operation="insert", status="ok").inc()
             log.debug("db_insert", extra={"table": table, "id": result})
         except Exception as e:
@@ -123,6 +189,7 @@ class Database(IDatabase):
             raise
         finally:
             database_operation_duration_seconds.labels(operation="insert").observe(time.monotonic() - start)
+
         if self._cache is not None:
             self._invalidate_table(table)
         return result
@@ -130,11 +197,23 @@ class Database(IDatabase):
     def update(self, table: str, id: str, data: dict) -> dict | None:
         start = time.monotonic()
         try:
-            result = (
-                self._dispatcher.dispatch(self._provider_update, table, id, data)
-                if self._dispatcher is not None
-                else self._delegate("update", table, id, data)
-            )
+            if self._shared_memory is not None:
+                from core.shared_memory import TaskData
+                task_data = TaskData(
+                    uuid=str(uuid4()),
+                    function_name="update",
+                    module_name="db",
+                    args_serialized=pickle.dumps((table, id, data)),
+                    kwargs_serialized=pickle.dumps({}),
+                    created_at=time.time(),
+                )
+                self._shared_memory.submit_task(task_data)
+                result = self._shared_memory.get_result(task_data.uuid)
+            elif self._dispatcher is not None:
+                result = self._dispatcher.dispatch(self._provider_update, table, id, data)
+            else:
+                result = self._delegate("update", table, id, data)
+
             database_operations_total.labels(operation="update", status="ok").inc()
             log.debug("db_update", extra={"table": table, "id": id})
         except Exception as e:
@@ -143,6 +222,7 @@ class Database(IDatabase):
             raise
         finally:
             database_operation_duration_seconds.labels(operation="update").observe(time.monotonic() - start)
+
         if self._cache is not None:
             self._cache.delete(f"db:{table}:{id}")
         return result
@@ -150,11 +230,23 @@ class Database(IDatabase):
     def delete(self, table: str, id: str) -> bool:
         start = time.monotonic()
         try:
-            result = (
-                self._dispatcher.dispatch(self._provider_delete, table, id)
-                if self._dispatcher is not None
-                else self._delegate("delete", table, id)
-            )
+            if self._shared_memory is not None:
+                from core.shared_memory import TaskData
+                task_data = TaskData(
+                    uuid=str(uuid4()),
+                    function_name="delete",
+                    module_name="db",
+                    args_serialized=pickle.dumps((table, id)),
+                    kwargs_serialized=pickle.dumps({}),
+                    created_at=time.time(),
+                )
+                self._shared_memory.submit_task(task_data)
+                result = self._shared_memory.get_result(task_data.uuid)
+            elif self._dispatcher is not None:
+                result = self._dispatcher.dispatch(self._provider_delete, table, id)
+            else:
+                result = self._delegate("delete", table, id)
+
             database_operations_total.labels(operation="delete", status="ok").inc()
             log.debug("db_delete", extra={"table": table, "id": id, "success": result})
         except Exception as e:
@@ -163,6 +255,7 @@ class Database(IDatabase):
             raise
         finally:
             database_operation_duration_seconds.labels(operation="delete").observe(time.monotonic() - start)
+
         if result and self._cache is not None:
             self._cache.delete(f"db:{table}:{id}")
         return result

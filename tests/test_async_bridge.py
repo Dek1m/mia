@@ -46,8 +46,10 @@ class FakeThreadPool:
 @pytest.fixture
 def dispatcher():
     wm = FakeWorkerManager()
-    tp = FakeThreadPool()
-    return SmartDispatcher(wm, thread_pool=tp), wm, tp
+    from core.shared_memory import SharedMemory
+    sm = SharedMemory(backend="local", num_blocks=16, block_size=4096)
+    sm.start()
+    return SmartDispatcher(wm, shared_memory=sm), wm, sm
 
 
 # === Тесты async bridge ===
@@ -58,7 +60,7 @@ class TestDispatchAsync:
 
     def test_async_function_dispatched_via_worker_manager(self, dispatcher) -> None:
         """Async-функция диспатчится через WorkerManager."""
-        dp, wm, tp = dispatcher
+        dp, wm, sm = dispatcher
 
         async def async_fn(x: int) -> int:
             return x * 2
@@ -70,7 +72,7 @@ class TestDispatchAsync:
 
     def test_async_function_with_task_object(self, dispatcher) -> None:
         """dispatch_async с явным Task-объектом."""
-        dp, wm, tp = dispatcher
+        dp, wm, sm = dispatcher
 
         async def async_fn(x: int) -> int:
             return x + 10
@@ -80,15 +82,14 @@ class TestDispatchAsync:
         assert future.result() == 13
 
     def test_sync_function_via_dispatch_async(self, dispatcher) -> None:
-        """sync-функция через dispatch_async идёт через ThreadPool."""
-        dp, wm, tp = dispatcher
+        """sync-функция через dispatch_async работает."""
+        dp, wm, sm = dispatcher
 
         def sync_fn(x: int) -> int:
             return x * 3
 
         future = dp.dispatch_async(sync_fn, 4)
         assert future.result() == 12
-        assert len(tp.submitted) == 1
 
 
 # === Тесты @task без dispatcher ===
@@ -136,8 +137,10 @@ class TestTaskWithDispatcher:
     def test_sync_task_uses_dispatcher(self) -> None:
         """sync @task dispatch через SmartDispatcher когда dispatcher установлен."""
         wm = FakeWorkerManager()
-        tp = FakeThreadPool()
-        dp = SmartDispatcher(wm, thread_pool=tp)
+        from core.shared_memory import SharedMemory
+        sm = SharedMemory(backend="local", num_blocks=16, block_size=4096)
+        sm.start()
+        dp = SmartDispatcher(wm, shared_memory=sm)
         set_global_dispatcher(dp)
 
         @task(type="cpu", timeout=5.0)
@@ -153,8 +156,10 @@ class TestTaskWithDispatcher:
     def test_async_task_uses_dispatcher(self) -> None:
         """async @task dispatch через SmartDispatcher когда dispatcher установлен."""
         wm = FakeWorkerManager()
-        tp = FakeThreadPool()
-        dp = SmartDispatcher(wm, thread_pool=tp)
+        from core.shared_memory import SharedMemory
+        sm = SharedMemory(backend="local", num_blocks=16, block_size=4096)
+        sm.start()
+        dp = SmartDispatcher(wm, shared_memory=sm)
         set_global_dispatcher(dp)
 
         @task(type="cpu", timeout=5.0)

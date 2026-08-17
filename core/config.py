@@ -225,6 +225,12 @@ class MiaConfig:
                     "backend": "null",
                 },
             },
+            "shared_memory": {
+                "backend": "local",
+                "redis_url": "redis://localhost:6379",
+                "redis_prefix": "mia:",
+                "result_ttl": 300,
+            },
         }
 
     def _resolve_path(self, explicit: str | Path | None) -> Path | None:

@@ -106,9 +106,20 @@ class Application:
         load_balancer = LoadBalancerFactory.create()
         self._services.register(ILoadBalancer, load_balancer)
 
+        # SharedMemory — единая точка входа для общей памяти
+        from core.shared_memory import SharedMemory
+        from core.config import MiaConfig
+        cfg = MiaConfig.get()
+        shared_memory = SharedMemory(
+            backend=cfg.get_value("shared_memory.backend", "local"),
+            redis_url=cfg.get_value("shared_memory.redis_url", "redis://localhost:6379"),
+            redis_prefix=cfg.get_value("shared_memory.redis_prefix", "mia:"),
+            result_ttl=cfg.get_value("shared_memory.result_ttl", 300),
+        )
+        shared_memory.start()
+        self._shared_memory = shared_memory
+
         # Worker Manager
-        from core.shared_memory import SharedMemoryManager
-        shared_memory = SharedMemoryManager()
         worker_manager = WorkerManagerFactory.create(
             load_balancer=load_balancer,
             heartbeat_monitor=heartbeat,
@@ -116,16 +127,10 @@ class Application:
         )
         self._services.register(IWorkerManager, worker_manager)
 
-        # Task System — создаём ДО SmartDispatcher для подключения
-        from pools.worker_thread_pool import WorkerThreadPool
-
-        thread_pool = WorkerThreadPool()
-        self._thread_pool = thread_pool
-
-        # SmartDispatcher — sync через ThreadPool, async через WorkerManager
+        # SmartDispatcher — всё через SharedMemory
         smart_dispatcher = SmartDispatcher(
             worker_manager,
-            thread_pool=thread_pool,
+            shared_memory=shared_memory,
         )
         self._services.register(ISmartDispatcher, smart_dispatcher)
 
@@ -292,9 +297,6 @@ class Application:
         worker_manager = self._services.resolve(IWorkerManager)
         worker_manager.start()
 
-        # Запуск ThreadPool для async-задач
-        self._thread_pool.start()
-
         # Запуск StatsBatchWriter (фоновый flush статистики задач)
         self._stats_writer.start()
 
@@ -310,8 +312,9 @@ class Application:
         # Остановить CPU metrics
         self._services.resolve(ICpuMetricsCollector).stop()
 
-        # Остановить ThreadPool
-        self._thread_pool.shutdown(wait=False)
+        # Остановить SharedMemory
+        if hasattr(self, "_shared_memory") and self._shared_memory is not None:
+            self._shared_memory.shutdown()
 
         # Остановить воркеров
         self._services.resolve(IWorkerManager).stop()

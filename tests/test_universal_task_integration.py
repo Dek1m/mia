@@ -60,26 +60,35 @@ class FakeThreadPool:
 
 @pytest.fixture
 def fake_dispatcher():
-    """SmartDispatcher с FakeWorkerManager и FakeThreadPool."""
+    """SmartDispatcher с FakeWorkerManager и SharedMemory."""
     wm = FakeWorkerManager()
-    tp = FakeThreadPool()
-    dp = SmartDispatcher(wm, thread_pool=tp)
-    return dp, wm, tp
+    from core.shared_memory import SharedMemory
+    sm = SharedMemory(backend="local", num_blocks=16, block_size=4096)
+    sm.start()
+    dp = SmartDispatcher(wm, shared_memory=sm)
+    return dp, wm, sm
 
 
 @pytest.fixture
 def real_dispatcher():
     """SmartDispatcher с FakeWorkerManager."""
     wm = FakeWorkerManager()
-    dp = SmartDispatcher(wm)
+    from core.shared_memory import SharedMemory
+    sm = SharedMemory(backend="local", num_blocks=16, block_size=4096)
+    sm.start()
+    dp = SmartDispatcher(wm, shared_memory=sm)
     yield dp, wm
+    sm.shutdown()
 
 
 @pytest.fixture
 def full_dispatcher():
     """SmartDispatcher с FakeWorkerManager."""
     wm = FakeWorkerManager()
-    dp = SmartDispatcher(wm)
+    from core.shared_memory import SharedMemory
+    sm = SharedMemory(backend="local", num_blocks=16, block_size=4096)
+    sm.start()
+    dp = SmartDispatcher(wm, shared_memory=sm)
     return dp, wm
 
 
@@ -90,8 +99,8 @@ class TestAsyncBridge:
     """Проверка async bridge: async-функции корректно выполняются через dispatch_async."""
 
     def test_sync_function_via_dispatch_async(self, fake_dispatcher) -> None:
-        """sync-функция через dispatch_async идёт через ThreadPool."""
-        dp, wm, tp = fake_dispatcher
+        """sync-функция через dispatch_async работает."""
+        dp, wm, sm = fake_dispatcher
 
         def sync_fn(x: int) -> int:
             return x * 3
@@ -99,7 +108,6 @@ class TestAsyncBridge:
         future = dp.dispatch_async(sync_fn, 4)
         assert isinstance(future, Future)
         assert future.result() == 12
-        assert len(tp.submitted) == 1
 
     def test_async_function_dispatched_via_worker_manager(
         self, real_dispatcher,
@@ -118,7 +126,7 @@ class TestAsyncBridge:
 
     def test_async_function_with_task_object(self, fake_dispatcher) -> None:
         """dispatch_async с явным Task-объектом."""
-        dp, wm, tp = fake_dispatcher
+        dp, wm, sm = fake_dispatcher
 
         async def async_fn(x: int) -> int:
             return x + 10
@@ -250,7 +258,7 @@ class TestWriteLock:
 
     def test_write_lock_manual_acquire_release(self, fake_dispatcher) -> None:
         """Ручное управление write-lock: acquire_lock/release_lock."""
-        dp, wm, tp = fake_dispatcher
+        dp, wm, sm = fake_dispatcher
 
         dp.acquire_lock()
         try:

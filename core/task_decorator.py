@@ -5,6 +5,7 @@ import asyncio
 import functools
 import inspect
 import time
+import typing
 from typing import Any, Callable, TypeVar
 from uuid import UUID
 
@@ -151,6 +152,7 @@ def task(
     validate: type | None = None,
     audit: bool = False,
     metrics: str | None = None,
+    extract_annotations: bool = True,
 ) -> Callable[[F], F]:
     """Декоратор для оборачивания функции в задачу Universal Task System.
 
@@ -169,6 +171,7 @@ def task(
         validate: Pydantic модель для валидации аргументов
         audit: Включить аудит-логирование
         metrics: Имя метрики для Prometheus
+        extract_angles: Извлекать type hints функции в _task_args/_task_return
     """
     task_type = TaskType(type)
 
@@ -188,6 +191,20 @@ def task(
         fn._task_validate = validate  # type: ignore[attr-defined]
         fn._task_audit = audit  # type: ignore[attr-defined]
         fn._task_metrics = metrics  # type: ignore[attr-defined]
+
+        # Извлечение аннотаций для автоматической интроспекции
+        if extract_annotations:
+            try:
+                hints = typing.get_type_hints(fn)
+                fn._task_args = {k: v for k, v in hints.items() if k != "return"}  # type: ignore[attr-defined]
+                fn._task_return = hints.get("return", None)  # type: ignore[attr-defined]
+            except Exception:
+                # Если get_type_hints не сработал (например, forward ref) — пропускаем
+                fn._task_args = {}  # type: ignore[attr-defined]
+                fn._task_return = None  # type: ignore[attr-defined]
+        else:
+            fn._task_args = {}  # type: ignore[attr-defined]
+            fn._task_return = None  # type: ignore[attr-defined]
 
         if asyncio.iscoroutinefunction(fn):
             return _wrap_async(fn)  # type: ignore[return-value]

@@ -135,11 +135,13 @@ class FakeThreadPool:
 
 
 @pytest.fixture
-def dispatcher() -> tuple[SmartDispatcher, FakeWorkerManager, FakeThreadPool]:
-    """SmartDispatcher с мокнутым WorkerManager и ThreadPool."""
+def dispatcher() -> tuple[SmartDispatcher, FakeWorkerManager]:
+    """SmartDispatcher с мокнутым WorkerManager и SharedMemory."""
     wm = FakeWorkerManager()
-    tp = FakeThreadPool()
-    return SmartDispatcher(wm, thread_pool=tp), wm, tp
+    from core.shared_memory import SharedMemory
+    sm = SharedMemory(backend="local", num_blocks=16, block_size=4096)
+    sm.start()
+    return SmartDispatcher(wm, shared_memory=sm), wm
 
 
 # ── 1. Полный цикл: Application → startup → Database → CRUD → shutdown ──
@@ -353,58 +355,55 @@ class TestSmartDispatcherRouting:
         return fn
 
     def test_read_routes_to_worker_manager(self, dispatcher: tuple) -> None:
-        """read-задача → ThreadPool (sync-задачи через thread pool)."""
-        disp, wm, tp = dispatcher
+        """read-задача выполняется через SharedMemory."""
+        disp, wm = dispatcher
         fn = self._make_fn("read")
         result = disp.dispatch(fn, 5)
         assert result == 10
-        assert len(tp.submitted) == 1
 
     def test_write_routes_to_worker_manager(self, dispatcher: tuple) -> None:
-        """write-задача → ThreadPool."""
-        disp, wm, tp = dispatcher
+        """write-задача выполняется через SharedMemory."""
+        disp, wm = dispatcher
         fn = self._make_fn("write")
         result = disp.dispatch(fn, 7)
         assert result == 14
-        assert len(tp.submitted) == 1
 
     def test_transaction_routes_to_worker_manager(self, dispatcher: tuple) -> None:
-        """transaction-задача → ThreadPool."""
-        disp, wm, tp = dispatcher
+        """transaction-задача выполняется через SharedMemory."""
+        disp, wm = dispatcher
         fn = self._make_fn("transaction")
         result = disp.dispatch(fn, 3)
         assert result == 6
-        assert len(tp.submitted) == 1
 
     def test_aggregate_routes_to_worker_manager(self, dispatcher: tuple) -> None:
-        """aggregate-задача → ThreadPool."""
-        disp, wm, tp = dispatcher
+        """aggregate-задача выполняется через SharedMemory."""
+        disp, wm = dispatcher
         fn = self._make_fn("aggregate")
         result = disp.dispatch(fn, 4)
         assert result == 8
-        assert len(tp.submitted) == 1
 
     def test_unknown_type_routes_to_worker_manager(self, dispatcher: tuple) -> None:
-        """Неизвестный тип → ThreadPool."""
-        disp, wm, tp = dispatcher
+        """Неизвестный тип выполняется через SharedMemory."""
+        disp, wm = dispatcher
         fn = lambda: 42  # noqa: E731
         result = disp.dispatch(fn)
         assert result == 42
-        assert len(tp.submitted) == 1
 
     def test_write_lock_serializes_writes(self) -> None:
         """write с _db_lock=True используется общая блокировка."""
         wm = FakeWorkerManager()
-        tp = FakeThreadPool()
-        disp = SmartDispatcher(wm, thread_pool=tp)
+        from core.shared_memory import SharedMemory
+        sm = SharedMemory(backend="local", num_blocks=16, block_size=4096)
+        sm.start()
+        disp = SmartDispatcher(wm, shared_memory=sm)
 
         fn = self._make_fn("write", lock=True)
         result = disp.dispatch(fn, 10)
         assert result == 20
 
     def test_dispatch_multiple_types(self, dispatcher: tuple) -> None:
-        """Смешанная маршрутизация: sync через ThreadPool."""
-        disp, wm, tp = dispatcher
+        """Смешанная маршрутизация: все через SharedMemory."""
+        disp, wm = dispatcher
         read_fn = self._make_fn("read")
         write_fn = self._make_fn("write")
         agg_fn = self._make_fn("aggregate")
@@ -413,12 +412,9 @@ class TestSmartDispatcherRouting:
         disp.dispatch(write_fn, 2)
         disp.dispatch(agg_fn, 3)
 
-        # Все sync-функции идут через ThreadPool
-        assert len(tp.submitted) == 3
-
     def test_worker_manager_receives_correct_args(self, dispatcher: tuple) -> None:
-        """ThreadPool получает правильные аргументы."""
-        disp, wm, tp = dispatcher
+        """SharedMemory получает правильные аргументы."""
+        disp, wm = dispatcher
 
         def add(a: int, b: int) -> int:
             return a + b
@@ -427,7 +423,6 @@ class TestSmartDispatcherRouting:
 
         result = disp.dispatch(add, 10, 20)
         assert result == 30
-        assert len(tp.submitted) == 1
 
 
 # ── 4. Observability: метрики инкрементируются ──

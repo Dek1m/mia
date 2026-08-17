@@ -1,11 +1,31 @@
-"""Базовый класс для модулей."""
+"""Базовый класс для модулей и метаданные модуля."""
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Any, Callable
 import functools
 
 from argenta_logging import get_logger
 
 log = get_logger(__name__)
+
+
+@dataclass
+class ModuleMeta:
+    """Конфигурация модуля: permissions, cache, lock, timeout.
+
+    Описывает поведение методов модуля на уровне метаданных:
+    - permissions: какие разрешения нужны для вызова метода
+    - cache_rules: TTL кеширования результатов метода
+    - lock_rules: шаблоны блокировок (например, по пользователю)
+    - timeout_defaults: таймауты по умолчанию для методов
+    """
+
+    permissions: dict[str, str] = field(default_factory=dict)
+    cache_rules: dict[str, int] = field(default_factory=dict)
+    lock_rules: dict[str, str] = field(default_factory=dict)
+    timeout_defaults: dict[str, float] = field(default_factory=dict)
 
 
 def api_method(fn: Callable | None = None, *, parallel: bool = False) -> Callable:
@@ -54,6 +74,15 @@ class ModuleBase(ABC):
     def version(self) -> str:
         """Версия модуля по умолчанию."""
         return "0.0.0"
+
+    @property
+    def meta(self) -> ModuleMeta:
+        """Метаданные модуля: permissions, cache, lock, timeout.
+
+        Переопределяйте в наследниках для декларативного описания
+        поведения методов модуля.
+        """
+        return ModuleMeta()
 
     def on_load(self, state: "Application") -> None:  # noqa: F821
         """Вызывается при загрузке модуля. Инициализация.
