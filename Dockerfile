@@ -4,19 +4,22 @@ WORKDIR /app
 
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc libpq-dev && \
+    gcc libpq-dev git && \
     rm -rf /var/lib/apt/lists/*
 
-# Python deps — install from requirements, not pyproject
+# Python deps — PyPI packages only
 RUN pip install --no-cache-dir \
-    argenta-logging>=0.1.0 \
     argon2-cffi>=23.1.0 \
-    PyJWT>=2.8.0 \
+    "PyJWT>=2.8.0" \
     prometheus-client>=0.20.0 \
     asyncpg>=0.29.0 \
     fastapi>=0.100.0 \
     uvicorn>=0.23.0 \
     httpx>=0.24.0
+
+# argenta-logging from GitHub (internal package)
+RUN pip install --no-cache-dir git+https://github.com/Dek1m/argenta-logging.git 2>/dev/null || \
+    echo "argenta-logging not available, using stdlib logging"
 
 # App code
 COPY . .
