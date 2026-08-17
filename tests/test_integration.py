@@ -243,7 +243,7 @@ class TestMetricsUpdated:
         from monitoring.metrics import (
             api_calls_total,
             api_duration_seconds,
-            threadpool_active,
+            worker_manager_active,
         )
 
         # Проверяем, что объекты метрик существуют и функциональны
@@ -258,10 +258,10 @@ class TestMetricsUpdated:
         hist.observe(0.05)
         assert hist._sum.get() >= 0.05
 
-        # Threads gauge
-        threads = threadpool_active
-        threads.set(4)
-        assert threads._value.get() == 4
+        # Workers gauge
+        workers = worker_manager_active
+        workers.set(4)
+        assert workers._value.get() == 4
 
     def test_metrics_labels_correct(self):
         """Метрики имеют правильные labels."""

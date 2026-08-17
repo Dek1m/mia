@@ -2,7 +2,6 @@
 
 Гарантии:
   - Все атрибуты _db_* доступны через getattr
-  - SmartDispatcher работает с legacy _db_type
   - @db_method принимает все старые параметры
   - Существующий код не ломается
 """
@@ -15,10 +14,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from core.adaptive_router import AdaptiveRouter
 from core.task import Task, TaskStatus, TaskType
-from core.task_classifier import TaskClassifier
 from core.task_store import TaskStore
+from core.task_decorator import set_global_dispatcher
 from modules.db.provider import db_method, DatabaseProvider
 from pools.smart_dispatcher import SmartDispatcher
 
@@ -47,20 +45,6 @@ class FakeProvider:
         self._pool = AsyncMock()
 
 
-class FakeThreadPool:
-    """Заглушка ThreadPool для тестов."""
-
-    def __init__(self):
-        self.submitted = []
-
-    def submit(self, fn, *args, **kwargs):
-        self.submitted.append((fn, args, kwargs))
-        result = fn(*args, **kwargs)
-        fut = Future()
-        fut.set_result(result)
-        return fut
-
-
 class FakeWorkerManager:
     """Заглушка WorkerManager для тестов."""
 
@@ -70,6 +54,16 @@ class FakeWorkerManager:
     def submit(self, fn, *args, **kwargs):
         self.submitted.append((fn, args, kwargs))
         return fn(*args, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _setup_dispatcher():
+    """Установить мок SmartDispatcher для всех тестов."""
+    wm = FakeWorkerManager()
+    dp = SmartDispatcher(wm)
+    set_global_dispatcher(dp)
+    yield
+    set_global_dispatcher(None)
 
 
 # ============================================================
@@ -225,125 +219,7 @@ class TestAllDbAttributesAccessible:
 
 
 # ============================================================
-# 2. SmartDispatcher работает с legacy _db_type
-# ============================================================
-
-
-class TestSmartDispatcherLegacy:
-    """SmartDispatcher корректно маршрутизирует по fn._db_type."""
-
-    def _make_fn(self, db_type: str, result: Any = 42, lock: bool = False):
-        def fn(*args, **kwargs):
-            return result
-        fn._db_type = db_type
-        if lock:
-            fn._db_lock = True
-        return fn
-
-    def test_read_to_thread_pool(self):
-        tp, wm = FakeThreadPool(), FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm)
-        fn = self._make_fn("read")
-
-        result = dispatcher.dispatch(fn)
-        assert result.result() == 42
-        assert len(tp.submitted) == 1
-        assert len(wm.submitted) == 0
-
-    def test_write_to_thread_pool(self):
-        tp, wm = FakeThreadPool(), FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm)
-        fn = self._make_fn("write")
-
-        result = dispatcher.dispatch(fn)
-        assert result.result() == 42
-        assert len(tp.submitted) == 1
-        assert len(wm.submitted) == 0
-
-    def test_aggregate_to_worker_manager(self):
-        tp, wm = FakeThreadPool(), FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm)
-        fn = self._make_fn("aggregate")
-
-        result = dispatcher.dispatch(fn)
-        assert result == 42
-        assert len(tp.submitted) == 0
-        assert len(wm.submitted) == 1
-
-    def test_transaction_to_thread_pool(self):
-        tp, wm = FakeThreadPool(), FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm)
-        fn = self._make_fn("transaction")
-
-        result = dispatcher.dispatch(fn)
-        assert result.result() == 42
-        assert len(tp.submitted) == 1
-        assert len(wm.submitted) == 0
-
-    def test_unknown_fallback_to_read(self):
-        tp, wm = FakeThreadPool(), FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm)
-        fn = self._make_fn("unknown_type")
-
-        result = dispatcher.dispatch(fn)
-        assert result.result() == 42
-        assert len(tp.submitted) == 1
-
-    def test_write_with_lock_uses_write_lock(self):
-        tp, wm = FakeThreadPool(), FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm)
-        fn = self._make_fn("write", lock=True)
-
-        result = dispatcher.dispatch(fn)
-        assert result.result() == 42
-        assert dispatcher.metrics["write"] == 1
-
-
-# ============================================================
-# 3. SmartDispatcher работает с _task_type (новый режим)
-# ============================================================
-
-
-class TestSmartDispatcherNewMode:
-    """SmartDispatcher работает с _task_type через TaskClassifier."""
-
-    def test_task_type_io_routes_to_thread_pool(self):
-        tp, wm = FakeThreadPool(), FakeWorkerManager()
-        store = TaskStore()
-        classifier = TaskClassifier()
-        dispatcher = SmartDispatcher(tp, wm, task_store=store, classifier=classifier)
-
-        def fn():
-            return "ok"
-
-        fn._task_type = TaskType.IO
-        fn.__module__ = "custom"
-        fn.__name__ = "custom_fn"
-
-        result = dispatcher.dispatch(fn)
-        assert result.result() == "ok"
-        assert len(tp.submitted) == 1
-
-    def test_task_type_aggregate_routes_to_worker_manager(self):
-        tp, wm = FakeThreadPool(), FakeWorkerManager()
-        store = TaskStore()
-        classifier = TaskClassifier()
-        dispatcher = SmartDispatcher(tp, wm, task_store=store, classifier=classifier)
-
-        def fn():
-            return "heavy"
-
-        fn._task_type = TaskType.AGGREGATE
-        fn.__module__ = "custom"
-        fn.__name__ = "heavy_fn"
-
-        result = dispatcher.dispatch(fn)
-        assert result == "heavy"
-        assert len(wm.submitted) == 1
-
-
-# ============================================================
-# 4. @db_method принимает все старые параметры
+# 2. @db_method принимает все старые параметры
 # ============================================================
 
 
@@ -429,7 +305,7 @@ class TestDbMethodAcceptsAllLegacyParams:
 
 
 # ============================================================
-# 5. Существующий код не ломается
+# 3. Существующий код не ломается
 # ============================================================
 
 
@@ -449,40 +325,6 @@ class TestExistingCodeNotBroken:
         assert result == {"id": "42", "fresh": True}
         cached = cache.get("get:42")
         assert cached == {"id": "42", "fresh": True}
-
-    def test_smart_dispatcher_with_sync_fn_having_db_type(self) -> None:
-        """SmartDispatcher работает с sync-функцией, имеющей _db_type."""
-        tp, wm = FakeThreadPool(), FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm)
-
-        def get(id: str) -> dict:
-            return {"id": id}
-
-        # Эмулируем то, что @db_method ставит на sync-функцию
-        get._db_type = "read"
-        get._db_cache_ttl = 30
-        get._db_cache_key = "get:{id}"
-
-        result = dispatcher.dispatch(get, "42")
-        assert result.result() == {"id": "42"}
-        assert len(tp.submitted) == 1
-        assert len(wm.submitted) == 0
-
-    def test_smart_dispatcher_aggregate_with_db_type(self) -> None:
-        """SmartDispatcher: aggregate через _db_type на sync-функции."""
-        tp, wm = FakeThreadPool(), FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm)
-
-        def count() -> int:
-            return 100
-
-        count._db_type = "aggregate"
-        count._db_cache_ttl = 60
-
-        result = dispatcher.dispatch(count)
-        assert result == 100
-        assert len(tp.submitted) == 0
-        assert len(wm.submitted) == 1
 
     def test_database_provider_methods_have_all_attrs(self) -> None:
         """Методы DatabaseProvider имеют все _db_* атрибуты."""
@@ -524,111 +366,3 @@ class TestExistingCodeNotBroken:
         provider = DatabaseProvider(pool=AsyncMock(), config=MagicMock())
         assert getattr(provider.transaction, "_db_type") == "transaction"
         assert getattr(provider.transaction, "_task_type") == TaskType.DATABASE
-
-
-# ============================================================
-# 6. TaskClassifier: каскад _task_type → _db_type
-# ============================================================
-
-
-class TestTaskClassifierCascade:
-    """TaskClassifier читает и _task_type, и _db_type."""
-
-    def test_task_type_takes_priority(self) -> None:
-        """_task_type имеет приоритет над _db_type."""
-        classifier = TaskClassifier()
-        task = Task.create(module_id="db", fn_name="get_user")
-
-        def fn():
-            pass
-
-        fn._task_type = TaskType.CPU
-        fn._db_type = "read"
-
-        result = classifier.classify(task, fn)
-        assert result == TaskType.CPU
-
-    def test_db_type_fallback_when_task_type_missing(self) -> None:
-        """Если _task_type нет — используется _db_type (если валидный TaskType)."""
-        classifier = TaskClassifier()
-        task = Task.create(module_id="db", fn_name="get_user")
-
-        def fn():
-            pass
-
-        fn._db_type = "aggregate"
-
-        # _resolve_task_type("aggregate") → TaskType("aggregate") = AGGREGATE
-        result = classifier.classify(task, fn)
-        assert result == TaskType.AGGREGATE
-
-    def test_no_attrs_uses_module_name(self) -> None:
-        """Нет ни _task_type, ни _db_type — использует module_id."""
-        classifier = TaskClassifier()
-        task = Task.create(module_id="db", fn_name="custom")
-
-        def fn():
-            pass
-
-        result = classifier.classify(task, fn)
-        assert result == TaskType.DATABASE
-
-    def test_db_type_io_string_resolves(self) -> None:
-        """_db_type='io' (валидная строка TaskType) → TaskType.IO."""
-        classifier = TaskClassifier()
-        task = Task.create(module_id="custom", fn_name="custom_fn")
-
-        def fn():
-            pass
-
-        fn._db_type = "io"
-
-        result = classifier.classify(task, fn)
-        assert result == TaskType.IO
-
-    def test_db_type_database_string_resolves(self) -> None:
-        """_db_type='database' (валидная строка TaskType) → TaskType.DATABASE."""
-        classifier = TaskClassifier()
-        task = Task.create(module_id="custom", fn_name="custom_fn")
-
-        def fn():
-            pass
-
-        fn._db_type = "database"
-
-        result = classifier.classify(task, fn)
-        assert result == TaskType.DATABASE
-
-    def test_legacy_db_type_string_returns_unknown(self) -> None:
-        """_db_type='read' (legacy-строка, нет в TaskType) → UNKNOWN.
-
-        Legacy-строки ('read', 'write', 'transaction') не являются валидными
-        значениями TaskType. _resolve_task_type возвращает UNKNOWN, и каскад
-        прерывается. Legacy-маршрутизация работает через SmartDispatcher
-        напрямую (fn._db_type → _DB_TYPE_MAP), а не через TaskClassifier.
-        """
-        classifier = TaskClassifier()
-        task = Task.create(module_id="db", fn_name="get_user")
-
-        def fn():
-            pass
-
-        fn._db_type = "read"
-
-        result = classifier.classify(task, fn)
-        assert result == TaskType.UNKNOWN
-
-    def test_explicit_task_bypasses_db_type_in_classifier(self) -> None:
-        """При явном Task — classifier определяет тип по каскаду."""
-        classifier = TaskClassifier()
-
-        def fn():
-            pass
-
-        fn._db_type = "read"
-
-        # Task с module_id="custom", fn_name="custom_fn" → нет правил → UNKNOWN
-        task = Task.create(module_id="custom", fn_name="custom_fn")
-        result = classifier.classify(task, fn)
-        # _resolve_task_type("read") → UNKNOWN, каскад: custom → нет → UNKNOWN
-        assert result == TaskType.UNKNOWN

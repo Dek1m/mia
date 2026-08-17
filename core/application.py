@@ -10,7 +10,7 @@ import threading
 from typing import Any
 from argenta_logging import get_logger
 from core.interfaces import (
-    ICache, IThreadPool, IEventBus,
+    ICache, IEventBus,
     IHeartbeatMonitor, IModuleRegistry, IServiceProvider,
     ICpuMetricsCollector, ILoadBalancer, IWorkerManager, IDatabase,
     ISmartDispatcher,
@@ -21,7 +21,7 @@ from modules_system.module_registry import ModuleRegistry
 from modules_system.verification import VerificationMode
 from communication.api_proxy import ApiProxy
 from core.factories import (
-    CacheFactory, ThreadPoolFactory,
+    CacheFactory,
     EventBusFactory, HeartbeatFactory,
     CpuMetricsCollectorFactory, LoadBalancerFactory, WorkerManagerFactory,
     DatabaseFactory,
@@ -90,10 +90,6 @@ class Application:
         cache = CacheFactory.create(self._cache_backend)
         self._services.register(ICache, cache)
 
-        # Thread Pool
-        thread_pool = ThreadPoolFactory.create()
-        self._services.register(IThreadPool, thread_pool)
-
         # Event Bus
         event_bus = EventBusFactory.create()
         self._services.register(IEventBus, event_bus)
@@ -111,22 +107,37 @@ class Application:
         self._services.register(ILoadBalancer, load_balancer)
 
         # Worker Manager
+        from core.shared_memory import SharedMemoryManager
+        shared_memory = SharedMemoryManager()
         worker_manager = WorkerManagerFactory.create(
             load_balancer=load_balancer,
             heartbeat_monitor=heartbeat,
+            shared_memory=shared_memory,
         )
         self._services.register(IWorkerManager, worker_manager)
 
-        # Database + SmartDispatcher + Task System
-        smart_dispatcher = SmartDispatcher(thread_pool, worker_manager)
+        # Task System — создаём ДО SmartDispatcher для подключения
+        from core.task_store import TaskStore
+        from pools.worker_thread_pool import WorkerThreadPool
+
+        task_store = TaskStore()
+        thread_pool = WorkerThreadPool()
+        self._thread_pool = thread_pool
+
+        # SmartDispatcher — sync через WorkerManager, async через ThreadPool
+        smart_dispatcher = SmartDispatcher(
+            worker_manager,
+            thread_pool=thread_pool,
+            task_store=task_store,
+        )
         self._services.register(ISmartDispatcher, smart_dispatcher)
 
         # Регистрируем глобальный dispatcher для @task decorator
         from core.task_decorator import set_global_dispatcher
         set_global_dispatcher(smart_dispatcher)
 
-        database, task_store, stats_writer = DatabaseFactory.create_with_task_system(
-            cache=cache, dispatcher=smart_dispatcher,
+        database, _, stats_writer = DatabaseFactory.create_with_task_system(
+            cache=cache, dispatcher=smart_dispatcher, task_store=task_store,
         )
         self._services.register(IDatabase, database)
 
@@ -139,7 +150,7 @@ class Application:
         self._services.register(IModuleRegistry, module_registry)
 
         # API Proxy
-        self._api_proxy = ApiProxy(thread_pool)
+        self._api_proxy = ApiProxy(dispatcher=smart_dispatcher)
 
         # Shutdown Manager
         self._shutdown_manager = ShutdownManager()
@@ -207,11 +218,6 @@ class Application:
     def event_bus(self) -> IEventBus:
         """Доступ к шине событий."""
         return self._services.resolve(IEventBus)
-
-    @property
-    def thread_pool(self) -> IThreadPool:
-        """Доступ к пулу потоков."""
-        return self._services.resolve(IThreadPool)
 
     @property
     def heartbeat(self) -> IHeartbeatMonitor:
@@ -287,14 +293,16 @@ class Application:
     # === Lifecycle ===
 
     def startup(self) -> None:
-        """Инициализация: запуск потоков, heartbeat, CPU metrics, воркеров, task system."""
-        self._services.resolve(IThreadPool).start()
+        """Инициализация: запуск heartbeat, CPU metrics, воркеров, task system."""
         self._services.resolve(IHeartbeatMonitor).start()
         self._services.resolve(ICpuMetricsCollector).start()
 
         # АВТОЗАПУСК ВОРКЕРОВ — по числу ядер CPU
         worker_manager = self._services.resolve(IWorkerManager)
         worker_manager.start()
+
+        # Запуск ThreadPool для async-задач
+        self._thread_pool.start()
 
         # Запуск StatsBatchWriter (фоновый flush статистики задач)
         self._stats_writer.start()
@@ -311,11 +319,13 @@ class Application:
         # Остановить CPU metrics
         self._services.resolve(ICpuMetricsCollector).stop()
 
+        # Остановить ThreadPool
+        self._thread_pool.shutdown(wait=False)
+
         # Остановить воркеров
         self._services.resolve(IWorkerManager).stop()
 
         self._services.resolve(IHeartbeatMonitor).stop()
-        self._services.resolve(IThreadPool).shutdown()
 
         # Shutdown database
         self._services.resolve(IDatabase).shutdown()

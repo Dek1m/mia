@@ -6,6 +6,7 @@ import functools
 import inspect
 import time
 from typing import Any, Callable, TypeVar
+from uuid import UUID
 
 from argenta_logging import get_logger
 from core.task import Task, TaskType
@@ -80,6 +81,68 @@ def _resolve_dispatcher() -> Any | None:
     return None
 
 
+class TaskFuture:
+    """Обёртка над Future с доступом к UUID задачи.
+
+    Attributes:
+        task_id: UUID задачи.
+    """
+
+    def __init__(self, future: Future, task_id: UUID) -> None:
+        self._future = future
+        self.task_id = task_id
+
+    @property
+    def uuid(self) -> UUID:
+        """UUID задачи."""
+        return self.task_id
+
+    def result(self, timeout: float | None = None) -> Any:
+        """Получить результат выполнения.
+
+        Args:
+            timeout: Максимальное время ожидания в секундах.
+
+        Returns:
+            Результат выполнения задачи.
+        """
+        return self._future.result(timeout=timeout)
+
+    def done(self) -> bool:
+        """Проверить, завершена ли задача."""
+        return self._future.done()
+
+    def status(self) -> str:
+        """Статус задачи: 'pending' | 'running' | 'completed' | 'failed'."""
+        if self._future.cancelled():
+            return "cancelled"
+        if self._future.done():
+            try:
+                self._future.result(timeout=0)
+                return "completed"
+            except Exception:
+                return "failed"
+        return "pending"
+
+    def exception(self, timeout: float | None = None) -> Exception | None:
+        """Получить исключение, если задача завершилась с ошибкой.
+
+        Args:
+            timeout: Максимальное время ожидания в секундах.
+        """
+        return self._future.exception(timeout=timeout)
+
+    def __await__(self):
+        """Поддержка await для async-контекстов.
+
+        Конвертирует concurrent.futures.Future в asyncio.Future
+        для корректной работы с await.
+        """
+        return asyncio.ensure_future(
+            asyncio.wrap_future(self._future)
+        ).__await__()
+
+
 def task(
     type: str = "unknown",
     timeout: float | None = None,
@@ -132,27 +195,30 @@ def task(
 
     def _wrap_sync(fn: F) -> F:
         @functools.wraps(fn)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
+        def wrapper(*args: Any, **kwargs: Any) -> TaskFuture:
             task_obj = _create_task(fn, args, kwargs)
             _validate(task_obj, validate)
 
-            # Пробуем получить dispatcher из ServiceRegistry
             dispatcher = _resolve_dispatcher()
-            if dispatcher is not None:
-                try:
-                    # Диспатчим через SmartDispatcher
-                    future = dispatcher.dispatch_async(task_obj, fn, *args, **kwargs)
-                    return future.result(timeout=resolved_timeout)
-                except Exception as e:
-                    log.debug(
-                        "Dispatcher dispatch failed, falling back to inline",
-                        extra={"error": str(e)},
-                    )
+            if dispatcher is None:
+                raise RuntimeError(
+                    f"SmartDispatcher not initialized. "
+                    f"Cannot dispatch task '{fn.__name__}'. "
+                    f"Call Application.startup() first."
+                )
 
-            # Fallback: inline выполнение
-            return _execute_with_retry(
-                fn, args, kwargs, task_obj, resolved_retry, resolved_retry_delay, audit, metrics
-            )
+            last_error: Exception | None = None
+            for attempt in range(resolved_retry + 1):
+                try:
+                    future = dispatcher.dispatch_async(task_obj, fn, *args, **kwargs)
+                    return TaskFuture(future, task_obj.id)
+                except Exception as e:
+                    last_error = e
+                    if attempt < resolved_retry:
+                        delay = resolved_retry_delay * (2 ** attempt)
+                        time.sleep(delay)
+
+            raise last_error  # type: ignore[misc]
 
         return wrapper  # type: ignore[return-value]
 
@@ -162,25 +228,27 @@ def task(
             task_obj = _create_task(fn, args, kwargs)
             _validate(task_obj, validate)
 
-            # Пробуем получить dispatcher из ServiceRegistry
             dispatcher = _resolve_dispatcher()
-            if dispatcher is not None:
+            if dispatcher is None:
+                raise RuntimeError(
+                    f"SmartDispatcher not initialized. "
+                    f"Cannot dispatch task '{fn.__name__}'. "
+                    f"Call Application.startup() first."
+                )
+
+            last_error: Exception | None = None
+            for attempt in range(resolved_retry + 1):
                 try:
-                    # Диспатчим через SmartDispatcher
                     future = dispatcher.dispatch_async(task_obj, fn, *args, **kwargs)
-                    # Оборачиваем Future в coroutine
                     loop = asyncio.get_event_loop()
                     return await asyncio.wrap_future(future, loop=loop)
                 except Exception as e:
-                    log.debug(
-                        "Dispatcher dispatch_async failed, falling back to inline",
-                        extra={"error": str(e)},
-                    )
+                    last_error = e
+                    if attempt < resolved_retry:
+                        delay = resolved_retry_delay * (2 ** attempt)
+                        await asyncio.sleep(delay)
 
-            # Fallback: inline выполнение
-            return await _execute_with_retry_async(
-                fn, args, kwargs, task_obj, resolved_retry, resolved_retry_delay, audit, metrics
-            )
+            raise last_error  # type: ignore[misc]
 
         # Если fn — async generator (например @asynccontextmanager),
         # @task НЕ должен оборачивать его в coroutine.
@@ -234,114 +302,3 @@ def _validate(task_obj: Task, validate: type | None) -> None:
         raise TaskValidationError(
             f"Validation failed for {task_obj.fn_name}: {e}"
         ) from e
-
-
-def _execute_with_retry(
-    fn: Callable,
-    args: tuple,
-    kwargs: dict,
-    task_obj: Task,
-    max_retries: int,
-    retry_delay: float,
-    audit: bool,
-    metrics: str | None,
-) -> Any:
-    """Выполняет функцию с retry и метриками."""
-    last_error: Exception | None = None
-
-    for attempt in range(max_retries + 1):
-        try:
-            task_obj.start()
-            result = fn(*args, **kwargs)
-            task_obj.complete(result)
-            _log_success(task_obj, audit, metrics)
-            return result
-        except Exception as e:
-            last_error = e
-            task_obj.fail(str(e))
-
-            if attempt < max_retries:
-                delay = retry_delay * (2**attempt)
-                log.warning(
-                    "Task retry",
-                    extra={
-                        "function": task_obj.fn_name,
-                        "attempt": attempt + 1,
-                        "max_retries": max_retries,
-                        "delay": delay,
-                        "error": str(e),
-                    },
-                )
-                time.sleep(delay)
-
-    _log_failure(task_obj, audit, metrics)
-    raise last_error  # type: ignore[misc]
-
-
-async def _execute_with_retry_async(
-    fn: Callable,
-    args: tuple,
-    kwargs: dict,
-    task_obj: Task,
-    max_retries: int,
-    retry_delay: float,
-    audit: bool,
-    metrics: str | None,
-) -> Any:
-    """Выполняет async функцию с retry и метриками."""
-    last_error: Exception | None = None
-
-    for attempt in range(max_retries + 1):
-        try:
-            task_obj.start()
-            result = await fn(*args, **kwargs)
-            task_obj.complete(result)
-            _log_success(task_obj, audit, metrics)
-            return result
-        except Exception as e:
-            last_error = e
-            task_obj.fail(str(e))
-
-            if attempt < max_retries:
-                delay = retry_delay * (2**attempt)
-                log.warning(
-                    "Task retry",
-                    extra={
-                        "function": task_obj.fn_name,
-                        "attempt": attempt + 1,
-                        "max_retries": max_retries,
-                        "delay": delay,
-                        "error": str(e),
-                    },
-                )
-                await asyncio.sleep(delay)
-
-    _log_failure(task_obj, audit, metrics)
-    raise last_error  # type: ignore[misc]
-
-
-def _log_success(task_obj: Task, audit: bool, metrics: str | None) -> None:
-    """Логирует успешное выполнение."""
-    if audit:
-        log.info(
-            "Task completed",
-            extra={
-                "function": task_obj.fn_name,
-                "duration": task_obj.duration,
-                "status": "ok",
-            },
-        )
-
-
-def _log_failure(task_obj: Task, audit: bool, metrics: str | None) -> None:
-    """Логирует неуспешное выполнение."""
-    if audit:
-        log.error(
-            "Task failed",
-            extra={
-                "function": task_obj.fn_name,
-                "duration": task_obj.duration,
-                "error": task_obj.error,
-                "status": "error",
-            },
-        )

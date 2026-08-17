@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Any, Callable
+from uuid import UUID
 
 
 class ICache(ABC):
@@ -26,19 +27,6 @@ class ICache(ABC):
 
     @abstractmethod
     def clear(self) -> None: ...
-
-
-class IThreadPool(ABC):
-    """Пул потоков."""
-
-    @abstractmethod
-    def start(self) -> None: ...
-
-    @abstractmethod
-    def submit(self, fn: Callable, *args: Any, **kwargs: Any) -> Any: ...
-
-    @abstractmethod
-    def shutdown(self, wait: bool = True) -> None: ...
 
 
 class IEventBus(ABC):
@@ -138,10 +126,16 @@ class ILoadBalancer(ABC):
     """Балансировщик нагрузки."""
 
     @abstractmethod
-    def select_worker(self, workers: dict[int, Any]) -> int | None: ...
+    def select_worker(self, workers: dict[int, Any] | None = None) -> int | None: ...
 
     @abstractmethod
     def update_worker_state(self, worker_id: int, state: Any) -> None: ...
+
+    @abstractmethod
+    def increment_active(self, worker_id: int) -> None: ...
+
+    @abstractmethod
+    def decrement_active(self, worker_id: int) -> None: ...
 
 
 class IWorkerManager(ABC):
@@ -159,6 +153,9 @@ class IWorkerManager(ABC):
     @abstractmethod
     def get_worker_ids(self) -> list[int]: ...
 
+    @abstractmethod
+    def submit(self, fn: Callable, *args: Any, timeout: float | None = None, **kwargs: Any) -> Any: ...
+
 
 class ISmartDispatcher(ABC):
     """Интерфейс SmartDispatcher — контракт для маршрутизатора задач."""
@@ -170,7 +167,7 @@ class ISmartDispatcher(ABC):
 
     @abstractmethod
     def dispatch_async(self, first: Any, *args: Any, **kwargs: Any) -> Any:
-        """Маршрутизировать задачу асинхронно через ThreadPool.
+        """Маршрутизировать задачу асинхронно.
 
         Args:
             first: Task-объект или функция для выполнения.
@@ -196,6 +193,65 @@ class ISmartDispatcher(ABC):
     @abstractmethod
     def metrics(self) -> dict[str, int]:
         """Количество выполненных задач по типам."""
+        ...
+
+
+class ISharedMemory(ABC):
+    """Хранилище результатов задач по UUID."""
+
+    @abstractmethod
+    def set(self, task_id: UUID, result: Any) -> None:
+        """Сохранить результат задачи."""
+        ...
+
+    @abstractmethod
+    def get(self, task_id: UUID) -> Any | None:
+        """Получить результат задачи."""
+        ...
+
+    @abstractmethod
+    def delete(self, task_id: UUID) -> bool:
+        """Удалить результат задачи."""
+        ...
+
+    @abstractmethod
+    def exists(self, task_id: UUID) -> bool:
+        """Проверить наличие результата."""
+        ...
+
+    @abstractmethod
+    def clear(self) -> None:
+        """Очистить все результаты."""
+        ...
+
+    @abstractmethod
+    def shutdown(self) -> None:
+        """Остановить хранилище."""
+        ...
+
+
+class IWorkerThreadPool(ABC):
+    """Пул потоков внутри воркера."""
+
+    @abstractmethod
+    def start(self) -> None:
+        """Запустить пул потоков."""
+        ...
+
+    @abstractmethod
+    def submit(self, fn: Callable, *args: Any, **kwargs: Any) -> Any:
+        """Отправить задачу на выполнение."""
+        ...
+
+    @abstractmethod
+    def shutdown(self, wait: bool = True) -> None:
+        """Остановить пул потоков."""
+        ...
+
+    @property
+    @abstractmethod
+    def active_count(self) -> int:
+        """Количество активных задач."""
         ...
 
 

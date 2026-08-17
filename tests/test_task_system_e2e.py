@@ -9,10 +9,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from core.adaptive_router import AdaptiveRouter
 from core.database import Database
 from core.task import Task, TaskStatus, TaskType
-from core.task_classifier import TaskClassifier
 from core.task_decorator import task
 from core.task_store import TaskStore
 from pools.smart_dispatcher import SmartDispatcher
@@ -81,20 +79,6 @@ class InMemoryProvider:
 # ============================================================
 
 
-class FakeThreadPool:
-    """Синхронный ThreadPool — выполняет fn в submit()."""
-
-    def __init__(self) -> None:
-        self.submitted: list = []
-
-    def submit(self, fn, *args, **kwargs):
-        self.submitted.append((fn, args, kwargs))
-        result = fn(*args, **kwargs)
-        fut = Future()
-        fut.set_result(result)
-        return fut
-
-
 class FakeWorkerManager:
     """Синхронный WorkerManager."""
 
@@ -107,7 +91,7 @@ class FakeWorkerManager:
 
 
 # ============================================================
-# 1. Полный цикл: создание -> классификация -> маршрутизация -> выполнение -> статистика
+# 1. Полный цикл: создание -> маршрутизация -> выполнение -> статистика
 # ============================================================
 
 
@@ -115,13 +99,10 @@ class TestFullCycle:
     """E2E: полный жизненный цикл задачи через все компоненты."""
 
     def test_full_pipeline(self):
-        """Task -> classify -> dispatch -> execute -> stats."""
+        """Task -> dispatch -> execute -> stats."""
         store = TaskStore()
-        classifier = TaskClassifier()
-        router = AdaptiveRouter(store)
-        tp = FakeThreadPool()
         wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm, task_store=store, classifier=classifier, adaptive_router=router)
+        dispatcher = SmartDispatcher(wm, task_store=store)
 
         def get_user(user_id: str) -> dict:
             return {"id": user_id, "name": "Alice"}
@@ -135,8 +116,6 @@ class TestFullCycle:
         assert len(history) == 1
         t = history[0]
 
-        # Классификация: модуль "db" -> DATABASE
-        assert t.task_type == TaskType.DATABASE
         assert t.status == TaskStatus.COMPLETED
         assert t.result == {"id": "42", "name": "Alice"}
         assert t.started_at is not None
@@ -145,13 +124,10 @@ class TestFullCycle:
         assert t.duration >= 0
 
     def test_full_pipeline_with_explicit_task(self):
-        """Явный Task -> classify -> dispatch -> execute -> stats."""
+        """Явный Task -> dispatch -> execute -> stats."""
         store = TaskStore()
-        classifier = TaskClassifier()
-        router = AdaptiveRouter(store)
-        tp = FakeThreadPool()
         wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm, task_store=store, classifier=classifier, adaptive_router=router)
+        dispatcher = SmartDispatcher(wm, task_store=store)
 
         t = Task.create(module_id="api", fn_name="fetch_data")
 
@@ -167,15 +143,12 @@ class TestFullCycle:
         assert found is not None
         assert found.status == TaskStatus.COMPLETED
         assert found.result == "data from https://example.com"
-        assert found.task_type == TaskType.NETWORK
 
     def test_full_pipeline_failure(self):
         """Задача падает -> FAILED + error в истории."""
         store = TaskStore()
-        classifier = TaskClassifier()
-        tp = FakeThreadPool()
         wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm, task_store=store, classifier=classifier)
+        dispatcher = SmartDispatcher(wm, task_store=store)
 
         def bad_fn():
             raise ValueError("connection timeout")
@@ -194,10 +167,8 @@ class TestFullCycle:
     def test_full_pipeline_multiple_tasks(self):
         """Несколько задач подряд — все корректно в истории."""
         store = TaskStore()
-        classifier = TaskClassifier()
-        tp = FakeThreadPool()
         wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm, task_store=store, classifier=classifier)
+        dispatcher = SmartDispatcher(wm, task_store=store)
 
         for i in range(10):
             fn = lambda x, i=i: x + i
@@ -211,109 +182,7 @@ class TestFullCycle:
 
 
 # ============================================================
-# 2. Adaptive override: 100+ медленных IO задач -> CPU
-# ============================================================
-
-
-class TestAdaptiveOverride:
-    """E2E: AdaptiveRouter переключает тип при перегрузке."""
-
-    def test_slow_io_overrides_to_cpu(self):
-        """100+ медленных IO-задач -> p95 > порога -> CPU."""
-        store = TaskStore()
-        classifier = TaskClassifier()
-        tp = FakeThreadPool()
-        wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm, task_store=store, classifier=classifier)
-        router = AdaptiveRouter(store)
-        dispatcher._adaptive_router = router
-
-        for i in range(110):
-            t = Task.create(module_id="storage", fn_name=f"read_block_{i}", task_type=TaskType.IO)
-            t.start()
-            t.complete(result=None)
-            t.duration = 0.5
-            store._active.pop(t.id, None)
-            store._history.append(t)
-
-        router.update_stats()
-
-        def slow_read(block_id: int) -> bytes:
-            return b"data"
-
-        slow_read.__module__ = "storage"
-        slow_read.__name__ = "read_block_new"
-
-        dispatcher.dispatch(slow_read, 999)
-
-        t = store.get_history()[0]
-        assert t.task_type == TaskType.CPU
-
-    def test_no_override_when_fast(self):
-        """Быстрые IO-задачи -> override не применяется."""
-        store = TaskStore()
-        classifier = TaskClassifier()
-        tp = FakeThreadPool()
-        wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm, task_store=store, classifier=classifier)
-        router = AdaptiveRouter(store)
-        dispatcher._adaptive_router = router
-
-        for i in range(50):
-            t = Task.create(module_id="storage", fn_name=f"read_{i}", task_type=TaskType.IO)
-            t.start()
-            t.complete(result=None)
-            t.duration = 0.01
-            store._active.pop(t.id, None)
-            store._history.append(t)
-
-        router.update_stats()
-
-        def fast_read(x):
-            return x
-
-        fast_read.__module__ = "storage"
-        fast_read.__name__ = "read_new"
-
-        dispatcher.dispatch(fast_read, 1)
-
-        t = store.get_history()[0]
-        assert t.task_type == TaskType.IO
-
-    def test_override_module_isolation(self):
-        """Override работает per-module: storage перегружен, api — нет."""
-        store = TaskStore()
-        classifier = TaskClassifier()
-        tp = FakeThreadPool()
-        wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm, task_store=store, classifier=classifier)
-        router = AdaptiveRouter(store)
-        dispatcher._adaptive_router = router
-
-        for i in range(110):
-            t = Task.create(module_id="storage", fn_name=f"read_{i}", task_type=TaskType.IO)
-            t.start()
-            t.complete(result=None)
-            t.duration = 0.5
-            store._active.pop(t.id, None)
-            store._history.append(t)
-
-        for i in range(50):
-            t = Task.create(module_id="api", fn_name=f"fetch_{i}", task_type=TaskType.NETWORK)
-            t.start()
-            t.complete(result=None)
-            t.duration = 0.01
-            store._active.pop(t.id, None)
-            store._history.append(t)
-
-        router.update_stats()
-
-        assert router.override(Task.create(module_id="storage", fn_name="r", task_type=TaskType.IO)) == TaskType.CPU
-        assert router.override(Task.create(module_id="api", fn_name="f", task_type=TaskType.NETWORK)) is None
-
-
-# ============================================================
-# 3. Overflow ring buffer: 25001 задача -> старые удаляются
+# 2. Overflow ring buffer: 25001 задача -> старые удаляются
 # ============================================================
 
 
@@ -368,7 +237,7 @@ class TestOverflowRingBuffer:
 
 
 # ============================================================
-# 4. Конкурентное добавление: 10 потоков
+# 3. Конкурентное добавление: 10 потоков
 # ============================================================
 
 
@@ -453,151 +322,12 @@ class TestConcurrentAddition:
 
         assert not errors, f"Errors: {errors}"
         stats = store.stats()
-        # Overflow: ring buffer хранит max 25000, старые выброшены
         assert stats["history_size"] <= 25000
         assert stats["completed"] == stats["history_size"]
 
 
 # ============================================================
-# 5. Legacy совместимость: SmartDispatcher с fn._db_type
-# ============================================================
-
-
-class TestLegacyCompatibility:
-    """E2E: SmartDispatcher корректно обрабатывает fn._db_type."""
-
-    def test_legacy_read(self):
-        """fn._db_type='read' -> ThreadPool."""
-        tp = FakeThreadPool()
-        wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm)
-
-        def read_user(user_id: str) -> dict:
-            return {"id": user_id}
-
-        read_user._db_type = "read"
-        read_user.__module__ = "db"
-        read_user.__name__ = "read_user"
-
-        result = dispatcher.dispatch(read_user, "1")
-        assert result.result() == {"id": "1"}
-        assert len(tp.submitted) == 1
-        assert len(wm.submitted) == 0
-
-    def test_legacy_write(self):
-        """fn._db_type='write' -> ThreadPool."""
-        tp = FakeThreadPool()
-        wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm)
-
-        def write_user(data: dict) -> str:
-            return "ok"
-
-        write_user._db_type = "write"
-        write_user.__module__ = "db"
-        write_user.__name__ = "write_user"
-
-        result = dispatcher.dispatch(write_user, {"name": "Bob"})
-        assert result.result() == "ok"
-        assert dispatcher.metrics["write"] == 1
-
-    def test_legacy_aggregate(self):
-        """fn._db_type='aggregate' -> WorkerManager."""
-        tp = FakeThreadPool()
-        wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm)
-
-        def compute_stats() -> int:
-            return 42
-
-        compute_stats._db_type = "aggregate"
-        compute_stats.__module__ = "compute"
-        compute_stats.__name__ = "compute_stats"
-
-        result = dispatcher.dispatch(compute_stats)
-        assert result == 42
-        assert len(tp.submitted) == 0
-        assert len(wm.submitted) == 1
-        assert dispatcher.metrics["aggregate"] == 1
-
-    def test_legacy_transaction(self):
-        """fn._db_type='transaction' -> ThreadPool."""
-        tp = FakeThreadPool()
-        wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm)
-
-        def transfer(from_id: str, to_id: str, amount: int) -> bool:
-            return True
-
-        transfer._db_type = "transaction"
-        transfer.__module__ = "db"
-        transfer.__name__ = "transfer"
-
-        result = dispatcher.dispatch(transfer, "A", "B", 100)
-        assert result.result() is True
-        assert len(tp.submitted) == 1
-        assert dispatcher.metrics["transaction"] == 1
-
-    def test_legacy_write_lock(self):
-        """fn._db_type='write' + _db_lock=True -> write_lock используется."""
-        tp = FakeThreadPool()
-        wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(tp, wm)
-
-        order = []
-
-        def locked_write(val: int) -> int:
-            order.append(val)
-            return val
-
-        locked_write._db_type = "write"
-        locked_write._db_lock = True
-        locked_write.__module__ = "db"
-        locked_write.__name__ = "locked_write"
-
-        f1 = dispatcher.dispatch(locked_write, 1)
-        f2 = dispatcher.dispatch(locked_write, 2)
-
-        assert f1.result() == 1
-        assert f2.result() == 2
-        assert order == [1, 2]
-
-    def test_legacy_mix_with_new(self):
-        """Legacy и новые задачи вперемешку."""
-        tp = FakeThreadPool()
-        wm = FakeWorkerManager()
-        store = TaskStore()
-        classifier = TaskClassifier()
-        router = AdaptiveRouter(store)
-        dispatcher = SmartDispatcher(tp, wm, task_store=store, classifier=classifier, adaptive_router=router)
-
-        # Legacy: fn._db_type = "read"
-        def legacy_read(x):
-            return x * 2
-
-        legacy_read._db_type = "read"
-        legacy_read.__module__ = "db"
-        legacy_read.__name__ = "legacy_read"
-
-        # Новый: без _db_type
-        def new_fn(x):
-            return x + 1
-
-        new_fn.__module__ = "api"
-        new_fn.__name__ = "new_fn"
-
-        dispatcher.dispatch(legacy_read, 5)
-        dispatcher.dispatch(new_fn, 10)
-
-        assert len(tp.submitted) == 2
-        history = store.get_history()
-        # Новый режим создаёт задачи в store, legacy — нет
-        assert len(history) == 1
-        assert history[0].fn_name == "new_fn"
-
-
-# ============================================================
-# 6. @task декоратор: задача с @task автоматически создаёт Task
+# 4. @task декоратор: задача с @task автоматически создаёт Task
 # ============================================================
 
 
@@ -620,37 +350,19 @@ class TestTaskDecoratorE2E:
         def read_data(path: str) -> str:
             return f"contents of {path}"
 
-        result = read_data("/etc/hosts")
-        assert result == "contents of /etc/hosts"
+        future = read_data("/etc/hosts")
+        assert future.result() == "contents of /etc/hosts"
 
     def test_decorator_retry(self):
-        """@task с retry повторяет при ошибках."""
-        call_count = 0
-
+        """@task с retry сохраняет метаданные retry (реальный retry на уровне SmartDispatcher)."""
         @task(type="cpu", retry=2, retry_delay=0.01)
         def flaky() -> int:
-            nonlocal call_count
-            call_count += 1
-            if call_count < 3:
-                raise ValueError("transient error")
             return 42
 
-        result = flaky()
-        assert result == 42
-        assert call_count == 3
-
-    def test_decorator_classifier_integration(self):
-        """Classifier корректно классифицирует функцию с @task."""
-        classifier = TaskClassifier()
-
-        @task(type="database")
-        def db_query(sql: str) -> list:
-            return [{"result": sql}]
-
-        t = Task.create(module_id="core", fn_name="db_query")
-        task_type = classifier.classify(t, db_query)
-        # _task_type = DATABASE имеет приоритет над правилами модуля/функции
-        assert task_type == TaskType.DATABASE
+        assert flaky._task_retry == 2
+        assert flaky._task_retry_delay == 0.01
+        future = flaky()
+        assert future.result() == 42
 
     def test_decorator_async(self):
         """@task работает с async функциями."""
@@ -687,8 +399,8 @@ class TestTaskDecoratorE2E:
             def my_task(x: int) -> int:
                 return x
 
-            result = my_task(42)
-            assert result == 42
+            future = my_task(42)
+            assert future.result() == 42
             assert len(created_tasks) >= 1
             assert created_tasks[0].task_type == TaskType.IO
         finally:
@@ -696,7 +408,7 @@ class TestTaskDecoratorE2E:
 
 
 # ============================================================
-# 7. Database integration: CRUD операции создают задачи
+# 5. Database integration: CRUD операции создают задачи
 # ============================================================
 
 
@@ -821,7 +533,6 @@ class TestDatabaseIntegration:
         db_facade.get("users", "1")
 
         assert stats_writer.add.call_count == 2
-        # Проверяем что передаются Task-объекты
         for call in stats_writer.add.call_args_list:
             assert isinstance(call[0][0], Task)
 

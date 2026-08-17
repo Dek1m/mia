@@ -1,9 +1,12 @@
-"""Unit-тесты для SharedMemoryManager."""
-import multiprocessing.shared_memory as shm
+"""Unit-тесты для SharedMemoryManager (core.shared_memory)."""
+from __future__ import annotations
+
+import time
+from uuid import uuid4
 
 import pytest
 
-from storage.shared_memory import SharedMemoryManager
+from core.shared_memory import SharedMemoryManager
 
 
 # === Фикстуры ===
@@ -11,95 +14,156 @@ from storage.shared_memory import SharedMemoryManager
 @pytest.fixture
 def manager():
     """Создаёт SharedMemoryManager и чистит после теста."""
-    m = SharedMemoryManager()
+    m = SharedMemoryManager(ttl=60.0)
     yield m
-    m.cleanup()
+    m.shutdown()
 
 
 # === Базовые тесты ===
 
-def test_create_segment(manager):
-    """create() создаёт сегмент разделяемой памяти."""
-    segment = manager.create("test_seg_1", size=1024)
-    assert segment is not None
-    assert isinstance(segment, shm.SharedMemory)
-    assert segment.size == 1024
-    assert "test_seg_1" in manager._segments
-    # Закрыть отдельно, cleanup тоже попытается
-    segment.close()
+def test_set_and_get(manager):
+    """set() сохраняет результат, get() возвращает его."""
+    uid = uuid4()
+    manager.set(uid, "hello")
+    assert manager.get(uid) == "hello"
 
 
-def test_attach_segment():
-    """attach() подключается к существующему сегменту."""
-    # Создаём через собственный менеджер, а аттачим через другой
-    creator = SharedMemoryManager()
-    original = creator.create("test_attach_seg", size=256)
+def test_get_missing(manager):
+    """get() для несуществующего UUID → None."""
+    uid = uuid4()
+    assert manager.get(uid) is None
 
-    attacher = SharedMemoryManager()
+
+def test_delete(manager):
+    """delete() удаляет результат."""
+    uid = uuid4()
+    manager.set(uid, 42)
+    assert manager.delete(uid) is True
+    assert manager.get(uid) is None
+
+
+def test_delete_missing(manager):
+    """delete() для несуществующего UUID → False."""
+    uid = uuid4()
+    assert manager.delete(uid) is False
+
+
+def test_exists(manager):
+    """exists() проверяет наличие результата."""
+    uid = uuid4()
+    assert manager.exists(uid) is False
+    manager.set(uid, "data")
+    assert manager.exists(uid) is True
+
+
+def test_clear(manager):
+    """clear() очищает все результаты."""
+    manager.set(uuid4(), "a")
+    manager.set(uuid4(), "b")
+    assert manager.size == 2
+    manager.clear()
+    assert manager.size == 0
+
+
+def test_size(manager):
+    """size() возвращает количество хранимых результатов."""
+    assert manager.size == 0
+    manager.set(uuid4(), "a")
+    assert manager.size == 1
+    manager.set(uuid4(), "b")
+    assert manager.size == 2
+
+
+# === TTL и очистка ===
+
+def test_ttl_eviction(manager):
+    """Результаты с TTL удаляются после истечения времени."""
+    short_ttl_manager = SharedMemoryManager(ttl=0.1)
     try:
-        attached = attacher.attach("test_attach_seg")
-        assert attached is not None
-        assert isinstance(attached, shm.SharedMemory)
-        assert "test_attach_seg" in attacher._segments
-        attached.close()
+        uid = uuid4()
+        short_ttl_manager.set(uid, "expire_me")
+        assert short_ttl_manager.get(uid) == "expire_me"
+        time.sleep(0.2)
+        short_ttl_manager._cleanup_expired()
+        assert short_ttl_manager.get(uid) is None
     finally:
-        creator.cleanup()
+        short_ttl_manager.shutdown()
 
 
-def test_cleanup(manager):
-    """cleanup() удаляет все сегменты и очищает словарь."""
-    manager.create("test_cleanup_1", size=512)
-    manager.create("test_cleanup_2", size=1024)
-    assert len(manager._segments) == 2
-
-    manager.cleanup()
-    assert len(manager._segments) == 0
-
-
-def test_cleanup_after_create(manager):
-    """cleanup после create удаляет файл сегмента."""
-    segment = manager.create("test_cleanup_file", size=256)
-    name = segment.name
-    segment.close()
-
-    manager.cleanup()
-
-    # Проверяем что сегмент удалён — повторное подключение должно упасть
-    with pytest.raises(FileNotFoundError):
-        shm.SharedMemory(name=name)
+def test_no_ttl_if_zero():
+    """TTL=0 → результаты не удаляются автоматически."""
+    m = SharedMemoryManager(ttl=0)
+    try:
+        uid = uuid4()
+        m.set(uid, "forever")
+        time.sleep(0.1)
+        m._cleanup_expired()
+        assert m.get(uid) == "forever"
+    finally:
+        m.shutdown()
 
 
-def test_multiple_segments(manager):
-    """Несколько сегментов создаются и работают параллельно."""
-    seg1 = manager.create("multi_seg_1", size=128)
-    seg2 = manager.create("multi_seg_2", size=256)
-    seg3 = manager.create("multi_seg_3", size=512)
+# === Ring buffer (eviction) ===
 
-    assert len(manager._segments) == 3
-    assert seg1.size == 128
-    assert seg2.size == 256
-    assert seg3.size == 512
+def test_evict_oldest_on_max():
+    """При превышении max_results удаляется самый старый результат."""
+    m = SharedMemoryManager(max_results=3, ttl=0)
+    try:
+        ids = [uuid4() for _ in range(4)]
+        for i, uid in enumerate(ids):
+            m.set(uid, f"result_{i}")
 
-    # Каждый сегмент доступен по имени
-    assert manager._segments["multi_seg_1"] is seg1
-    assert manager._segments["multi_seg_2"] is seg2
-    assert manager._segments["multi_seg_3"] is seg3
-
-    seg1.close()
-    seg2.close()
-    seg3.close()
+        # Самый старый (ids[0]) должен быть удалён
+        assert m.size == 3
+        assert m.get(ids[0]) is None
+        assert m.get(ids[1]) == "result_1"
+        assert m.get(ids[3]) == "result_3"
+    finally:
+        m.shutdown()
 
 
-def test_segment_data_write_read(manager):
-    """Запись и чтение данных через разделяемую память."""
-    data = b"hello shared memory!"
-    segment = manager.create("test_rw_seg", size=len(data))
+# === Thread safety ===
 
-    # Записать данные в буфер
-    segment.buf[:len(data)] = data
+def test_concurrent_set_get():
+    """Параллельные set/get не падают."""
+    import threading
 
-    # Прочитать данные обратно
-    result = bytes(segment.buf[:len(data)])
-    assert result == data
+    m = SharedMemoryManager(ttl=0)
+    try:
+        errors = []
 
-    segment.close()
+        def writer(n):
+            try:
+                for i in range(100):
+                    uid = uuid4()
+                    m.set(uid, f"val_{n}_{i}")
+            except Exception as e:
+                errors.append(e)
+
+        def reader():
+            try:
+                for _ in range(100):
+                    m.size
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=writer, args=(i,)) for i in range(4)]
+        threads += [threading.Thread(target=reader) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=5)
+
+        assert errors == []
+    finally:
+        m.shutdown()
+
+
+# === Shutdown ===
+
+def test_shutdown(manager):
+    """shutdown() останавливает фоновый поток и очищает результаты."""
+    manager.set(uuid4(), "data")
+    manager.shutdown()
+    assert manager.size == 0
+    assert manager._running is False

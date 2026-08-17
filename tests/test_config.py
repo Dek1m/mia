@@ -81,7 +81,6 @@ class TestDefaults:
             "pools.load_balancer.max_active_tasks",
             "pools.cpu_metrics.collect_interval",
             "pools.worker.heartbeat_period",
-            "pools.thread_pool.max_workers",  # default = None
             "resilience.retry.max_attempts",
             "resilience.retry.base_delay",
             "resilience.retry.max_delay",
@@ -95,14 +94,8 @@ class TestDefaults:
             "modules.verification.mode",
         ]
         for dotpath in expected_dotpaths:
-            # max_workers = None — это валидный дефолт (=cpu_count)
-            if dotpath == "pools.thread_pool.max_workers":
-                assert cfg.get_value(dotpath) is None, (
-                    f"Default for '{dotpath}' should be None"
-                )
-            else:
-                value = cfg.get_value(dotpath)
-                assert value is not None, f"Default for '{dotpath}' is None"
+            value = cfg.get_value(dotpath)
+            assert value is not None, f"Default for '{dotpath}' is None"
 
     def test_numeric_defaults_exact_values(self):
         """Точные значения числовых дефолтов (сверка с хардкодом)."""
@@ -128,7 +121,6 @@ class TestDefaults:
             "pools.load_balancer.max_active_tasks": 10,
             "pools.cpu_metrics.collect_interval": 1.0,
             "pools.worker.heartbeat_period": 5.0,
-            "pools.thread_pool.max_workers": None,
             "resilience.retry.max_attempts": 3,
             "resilience.retry.base_delay": 0.5,
             "resilience.retry.max_delay": 30.0,
@@ -327,21 +319,6 @@ class TestEnvOverlay:
 
         assert cfg.get_value("storage.cache.backend") == "hierarchy"
 
-    def test_env_null_for_thread_pool(self, monkeypatch):
-        """ENV MIA_THREAD_POOL_MAX_WORKERS=null → None."""
-        monkeypatch.setenv("MIA_THREAD_POOL_MAX_WORKERS", "null")
-
-        cfg = MiaConfig.load()
-
-        assert cfg.get_value("pools.thread_pool.max_workers") is None
-
-    def test_env_none_for_thread_pool(self, monkeypatch):
-        """ENV MIA_THREAD_POOL_MAX_WORKERS=none → None."""
-        monkeypatch.setenv("MIA_THREAD_POOL_MAX_WORKERS", "none")
-
-        cfg = MiaConfig.load()
-
-        assert cfg.get_value("pools.thread_pool.max_workers") is None
 
 
 # ── Тесты каскада ──────────────────────────────────────────────────
@@ -558,10 +535,6 @@ class TestEnvMapping:
     def test_cast_env_value_string(self):
         """_cast_env_value оставляет строку для не-числовых ключей."""
         assert _cast_env_value("hierarchy", "storage.cache.backend") == "hierarchy"
-
-    def test_cast_env_value_null_thread_pool(self):
-        """_cast_env_value для thread_pool.max_workers = null → None."""
-        assert _cast_env_value("null", "pools.thread_pool.max_workers") is None
 
 
 # ── Тесты deep_merge ───────────────────────────────────────────────

@@ -89,38 +89,6 @@ class TestManyEvents:
         state.shutdown()
 
 
-class TestThreadPoolThroughput:
-    """100 задач в ThreadPool за < 2 секунд."""
-
-    def test_thread_pool_throughput(self):
-        """100 задач отправлены через submit и завершены."""
-        state = Application(modules_dir="modules")
-        state.startup()
-
-        results = []
-        futures = []
-
-        def task(x: int) -> int:
-            return x * x
-
-        start = time.time()
-        for i in range(100):
-            f = state.thread_pool.submit(task, i)
-            futures.append(f)
-
-        # Ждём все
-        for f in futures:
-            results.append(f.result(timeout=5))
-        elapsed = time.time() - start
-
-        print(f"\n100 thread tasks: {elapsed:.3f}s")
-        assert len(results) == 100
-        assert results == [i * i for i in range(100)]
-        assert elapsed < 2.0, f"Слишком медленно: {elapsed:.3f}s"
-
-        state.shutdown()
-
-
 class TestWorkerManagerThroughput:
     """50 задач в WorkerManager за < 5 секунд."""
 

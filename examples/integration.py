@@ -1,11 +1,10 @@
 """Полная интеграция всех компонентов MIA.
 
 Демонстрирует:
-- State: центральный оркестратор, создание и связывание компонентов
+- Application: центральный оркестратор, создание и связывание компонентов
 - Module lifecycle: discover → load → on_load → API → on_unload → shutdown
 - ApiProxy: state.api.module.method()
 - EventBus: pub/sub коммуникация между модулями
-- ThreadPool: @api_method(parallel=True) и прямые submit
 - WorkerManager: multiprocessing dispatching с fault tolerance
 - Heartbeat: мониторинг процессов
 - Metrics: метрики обновляются
@@ -77,20 +76,7 @@ def main() -> None:
     state.event_bus.publish("unsubscribed.event", "noise")
     log.info("Publish without subscribers: OK")
 
-    # ── 5. ThreadPool: @api_method(parallel=True) ──────────────
-    log.info("Testing ThreadPool parallel API method")
-    future = state.thread_pool.submit(lambda: "Hello from thread!")
-    thread_result = future.result(timeout=5)
-    log.info("ThreadPool result", extra={"result": thread_result})
-    assert thread_result == "Hello from thread!"
-
-    # parallel метод через ApiProxy
-    future2 = state.api.sample.heavy_computation([1, 2, 3, 4, 5])
-    parallel_result = future2.result(timeout=5)
-    log.info("Parallel API result", extra={"result": parallel_result})
-    assert parallel_result == 15
-
-    # ── 6. WorkerManager: multiprocessing dispatching ──────────
+    # ── 5. WorkerManager: multiprocessing dispatching ──────────
     log.info("Testing WorkerManager multiprocessing")
     wm = state.worker_manager
     log.info("WorkerManager created", extra={"exists": wm is not None})

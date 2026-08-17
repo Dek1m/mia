@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import gc
+import multiprocessing
+import signal
+import time
 
 import pytest
 
@@ -35,3 +39,27 @@ def _restore_event_loop() -> None:
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_processes() -> None:
+    """Завершает все дочерние процессы после каждого теста.
+
+    Тесты, создающие Application с WorkerManager, могут не вызывать
+    shutdown(). Этот fixture принудительно завершает все multiprocessing
+    children, чтобы избежать утечки процессов.
+    """
+    yield
+    gc.collect()
+    children = multiprocessing.active_children()
+    if children:
+        for child in children:
+            try:
+                child.terminate()
+            except (OSError, ValueError):
+                pass
+        for child in children:
+            try:
+                child.join(timeout=2)
+            except (OSError, ValueError):
+                pass

@@ -9,7 +9,10 @@ import sys
 import threading
 import time
 from typing import Any, Callable
+from uuid import uuid4
+
 from argenta_logging import get_logger
+from core.shared_memory import SharedMemoryManager
 from monitoring.metrics import (
     worker_manager_active,
     worker_manager_restarts_total,
@@ -19,6 +22,7 @@ from monitoring.metrics import (
     processpool_killed_total,
 )
 from pools.load_balancer import LoadBalancer, WorkerState
+from pools.worker_thread_pool import WorkerThreadPool
 
 log = get_logger(__name__)
 
@@ -29,8 +33,12 @@ def _worker_entry(
     worker_id: int,
     core_id: int,
     heartbeat_queue: multiprocessing.Queue | None = None,
+    max_threads: int = 4,
 ) -> None:
-    """Точка входа worker-процесса."""
+    """Точка входа worker-процесса.
+
+    Создаёт WorkerThreadPool внутри процесса и выполняет задачи через него.
+    """
     signal.signal(signal.SIGTERM, lambda s, f: sys.exit(0))
 
     # Привязка к ядру
@@ -41,33 +49,44 @@ def _worker_entry(
 
     log.info("Worker started", extra={"worker_id": worker_id, "pid": os.getpid(), "core": core_id})
 
+    # Создаём ThreadPool внутри воркера
+    thread_pool = WorkerThreadPool(max_threads=max_threads)
+    thread_pool.start()
+
     last_heartbeat = time.time()
 
-    while True:
-        try:
-            task = task_queue.get(timeout=1.0)
-            if task is None:
-                break
-            request_id, fn, args, kwargs = task
+    try:
+        while True:
             try:
-                result = fn(*args, **kwargs)
-                result_queue.put((request_id, "ok", result))
-            except Exception as e:
-                log.error("Worker error", extra={"worker_id": worker_id, "error": str(e)})
-                result_queue.put((request_id, "error", str(e)))
-        except queue.Empty:
-            pass
+                task = task_queue.get(timeout=1.0)
+                if task is None:
+                    break
 
-        # Каждые N секунд отправляем heartbeat
-        now = time.time()
-        from core.config import MiaConfig
-        heartbeat_period = MiaConfig.get().get_value("pools.worker.heartbeat_period", 5.0)
-        if heartbeat_queue is not None and now - last_heartbeat >= heartbeat_period:
-            try:
-                heartbeat_queue.put(os.getpid())
-                last_heartbeat = now
-            except (OSError, ValueError):
+                request_id, fn, args, kwargs = task
+                try:
+                    # Выполняем через WorkerThreadPool
+                    future = thread_pool.submit(fn, *args, **kwargs)
+                    result = future.result()
+                    result_queue.put((request_id, "ok", result))
+                except Exception as e:
+                    log.error("Worker error", extra={"worker_id": worker_id, "error": str(e)})
+                    result_queue.put((request_id, "error", str(e)))
+            except queue.Empty:
                 pass
+
+            # Каждые N секунд отправляем heartbeat
+            now = time.time()
+            from core.config import MiaConfig
+            heartbeat_period = MiaConfig.get().get_value("pools.worker.heartbeat_period", 5.0)
+            if heartbeat_queue is not None and now - last_heartbeat >= heartbeat_period:
+                try:
+                    heartbeat_queue.put(os.getpid())
+                    last_heartbeat = now
+                except (OSError, ValueError):
+                    pass
+    finally:
+        thread_pool.shutdown(wait=False)
+        log.info("Worker thread pool shut down", extra={"worker_id": worker_id})
 
     log.info("Worker stopped", extra={"worker_id": worker_id})
 
@@ -76,6 +95,7 @@ class WorkerManager:
     """Управление lifecycle воркеров: spawn, restart, shutdown.
 
     Каждый воркер привязан к ядру через CPU affinity.
+    Внутри каждого воркера создаётся WorkerThreadPool.
     Интегрирован с LoadBalancer для выбора наименее загруженного.
     """
 
@@ -83,9 +103,11 @@ class WorkerManager:
         self,
         load_balancer: LoadBalancer | None = None,
         heartbeat_monitor: Any | None = None,
+        shared_memory: SharedMemoryManager | None = None,
     ) -> None:
         self._load_balancer = load_balancer or LoadBalancer()
         self._heartbeat_monitor = heartbeat_monitor
+        self._shared_memory = shared_memory or SharedMemoryManager()
         self._workers: dict[int, multiprocessing.Process] = {}
         self._worker_ids: dict[int, int] = {}
         self._worker_states: dict[int, WorkerState] = {}
@@ -99,9 +121,18 @@ class WorkerManager:
         self._heartbeat_thread: threading.Thread | None = None
         self._cpu_count = os.cpu_count() or 1
 
+        # Конфигурация ThreadPool внутри воркеров
+        from core.config import MiaConfig
+        cfg = MiaConfig.get()
+        self._max_threads_per_worker = cfg.get_value("pools.worker.thread_pool.max_threads", 4)
+
     @property
     def load_balancer(self) -> LoadBalancer:
         return self._load_balancer
+
+    @property
+    def shared_memory(self) -> SharedMemoryManager:
+        return self._shared_memory
 
     def start(self, num_workers: int | None = None) -> None:
         """Запустить N воркеров (по числу ядер по умолчанию).
@@ -231,8 +262,7 @@ class WorkerManager:
         # Обновить состояния воркеров для балансировщика
         self._sync_worker_states()
 
-        import uuid
-        request_id = uuid.uuid4().hex
+        request_id = uuid4().hex
         result_event = threading.Event()
         result_container = [None, None]
 
@@ -278,7 +308,10 @@ class WorkerManager:
         core_id = worker_id % self._cpu_count
         p = multiprocessing.Process(
             target=_worker_entry,
-            args=(self._task_queue, self._result_queue, worker_id, core_id, self._heartbeat_queue),
+            args=(
+                self._task_queue, self._result_queue, worker_id, core_id,
+                self._heartbeat_queue, self._max_threads_per_worker,
+            ),
         )
         p.start()
         self._workers[p.pid] = p

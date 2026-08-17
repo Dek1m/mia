@@ -5,7 +5,6 @@
 
 Префиксы:
   - api_        — API Proxy (вызовы методов)
-  - threadpool_ — ThreadPoolManager
   - processpool_— ProcessPool
   - heartbeat_  — HeartbeatMonitor
   - cpu_        — CpuMetricsCollector, CpuAffinityProvider
@@ -38,22 +37,6 @@ api_duration_seconds = Histogram(
     "API method call duration",
     ["module", "method"],
     buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
-)
-
-
-# ============================================================
-# ThreadPool — потоки
-# ============================================================
-
-threadpool_active = Gauge(
-    "threadpool_active",
-    "Active threads in pool",
-)
-
-threadpool_tasks_submitted_total = Counter(
-    "threadpool_tasks_submitted_total",
-    "Total tasks submitted to thread pool",
-    ["status"],
 )
 
 
@@ -235,15 +218,7 @@ task_store_flush_total = Counter(
     "Total flush operations from StatsBatchWriter",
 )
 
-task_classifier_rules_total = Gauge(
-    "task_classifier_rules_total",
-    "Current number of classifier rules",
-)
 
-task_adaptive_overrides_total = Counter(
-    "task_adaptive_overrides_total",
-    "Total adaptive routing overrides",
-)
 
 
 # ============================================================

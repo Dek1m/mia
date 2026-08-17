@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
-from unittest.mock import MagicMock, patch
+from concurrent.futures import Future
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
-from core.task_decorator import task, TaskValidationError
+from core.task_decorator import task, TaskValidationError, set_global_dispatcher, TaskFuture
 from core.task import TaskType
 
 
@@ -26,7 +27,31 @@ class ComputationInput(BaseModel):
 
 
 # ============================================================
-# Тестовые функции
+# Mock WorkerManager
+# ============================================================
+
+
+class FakeWorkerManager:
+    """Синхронный WorkerManager для тестов."""
+
+    def __init__(self) -> None:
+        self.submitted: list[tuple] = []
+
+    def submit(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
+        self.submitted.append((fn, args, kwargs))
+        return fn(*args, **kwargs)
+
+
+def _make_dispatcher() -> Any:
+    """Создать SmartDispatcher с FakeWorkerManager."""
+    from pools.smart_dispatcher import SmartDispatcher
+
+    wm = FakeWorkerManager()
+    return SmartDispatcher(wm)
+
+
+# ============================================================
+# Тестовые функции (декорируются ДО тестов)
 # ============================================================
 
 
@@ -120,75 +145,111 @@ class TestMetadata:
 
 
 # ============================================================
-# Тесты выполнения
+# Тесты выполнения (через mock dispatcher)
 # ============================================================
 
 
 class TestExecution:
-    """Проверка базового выполнения задач."""
+    """Проверка базового выполнения задач через SmartDispatcher."""
+
+    def setup_method(self) -> None:
+        self._dispatcher = _make_dispatcher()
+        set_global_dispatcher(self._dispatcher)
+
+    def teardown_method(self) -> None:
+        set_global_dispatcher(None)
 
     def test_sync_execution(self):
-        result = cpu_task([1, 2, 3])
-        assert result == 12  # (1+2+3) * 2
+        future = cpu_task([1, 2, 3])
+        assert isinstance(future, TaskFuture)
+        assert future.uuid is not None
+        assert future.result() == 12  # (1+2+3) * 2
 
     def test_sync_execution_simple(self):
-        result = io_task("test.txt")
-        assert result == "read test.txt"
+        future = io_task("test.txt")
+        assert isinstance(future, TaskFuture)
+        assert future.result() == "read test.txt"
 
     def test_db_task(self):
-        result = db_task("SELECT *")
-        assert result == [{"result": "SELECT *"}]
+        future = db_task("SELECT *")
+        assert isinstance(future, TaskFuture)
+        assert future.result() == [{"result": "SELECT *"}]
 
     @pytest.mark.asyncio
     async def test_async_execution(self):
         result = await async_task(5)
         assert result == 15  # 5 * 3
 
+    def test_task_future_has_uuid(self):
+        """TaskFuture содержит UUID задачи."""
+        future = cpu_task([1, 2, 3])
+        assert hasattr(future, "uuid")
+        assert future.uuid is not None
+        assert future.task_id == future.uuid
+
+    def test_task_future_status(self):
+        """TaskFuture.status() возвращает корректный статус."""
+        future = cpu_task([1, 2, 3])
+        assert future.status() == "completed"
+        assert future.done() is True
+
 
 # ============================================================
-# Тесты retry
+# Тесты retry (через mock dispatcher)
 # ============================================================
 
 
 class TestRetry:
-    """Проверка retry логики."""
+    """Проверка retry логики через SmartDispatcher."""
 
-    def test_retry_success_after_failures(self):
-        flaky_task.call_count = 0  # type: ignore[attr-defined]
-        result = flaky_task()
-        assert result == 42
-        assert flaky_task.call_count == 3  # type: ignore[attr-defined]
+    def setup_method(self) -> None:
+        self._dispatcher = _make_dispatcher()
+        set_global_dispatcher(self._dispatcher)
 
-    def test_retry_exhausted_raises(self):
-        @task(type="cpu", retry=1, retry_delay=0.01)
+    def teardown_method(self) -> None:
+        set_global_dispatcher(None)
+
+    def test_retry_metadata_set(self):
+        """@task(retry=3) устанавливает retry метаданные."""
+        assert cpu_task._task_retry == 3
+
+    def test_retry_delay_metadata_set(self):
+        """@task(retry_delay=0.1) устанавливает retry_delay метаданные."""
+        assert cpu_task._task_retry_delay == 0.1
+
+    def test_retry_zero_metadata(self):
+        """@task(retry=0) устанавливает retry=0."""
+        assert io_task._task_retry == 0
+
+    def test_error_propagates(self):
+        """Ошибка прокидывается через SmartDispatcher (retry на уровне декоратора удалён)."""
+        @task(type="cpu", retry=2, retry_delay=0.01)
         def always_fail() -> int:
-            always_fail.call_count += 1  # type: ignore[attr-defined]
             raise ValueError("Always fails")
 
-        always_fail.call_count = 0  # type: ignore[attr-defined]
         with pytest.raises(ValueError, match="Always fails"):
             always_fail()
-        assert always_fail.call_count == 2  # type: ignore[attr-defined]
-
-    @pytest.mark.asyncio
-    async def test_async_retry_success(self):
-        async_flaky_task.call_count = 0  # type: ignore[attr-defined]
-        result = await async_flaky_task()
-        assert result == 99
-        assert async_flaky_task.call_count == 2  # type: ignore[attr-defined]
 
 
 # ============================================================
-# Тесты валидации
+# Тесты валидации (через mock dispatcher)
 # ============================================================
 
 
 class TestValidation:
     """Проверка валидации через Pydantic."""
 
+    def setup_method(self) -> None:
+        self._dispatcher = _make_dispatcher()
+        set_global_dispatcher(self._dispatcher)
+
+    def teardown_method(self) -> None:
+        set_global_dispatcher(None)
+
     def test_validation_success(self):
-        result = validated_task(data=[1, 2, 3], multiplier=5)
-        assert result == 30  # (1+2+3) * 5
+        future = validated_task(data=[1, 2, 3], multiplier=5)
+        assert isinstance(future, TaskFuture)
+        assert future.result() == 30  # (1+2+3) * 5
 
     def test_validation_failure(self):
         with pytest.raises(TaskValidationError):
@@ -200,30 +261,24 @@ class TestValidation:
 
 
 # ============================================================
-# Тесты аудита
+# Тесты аудита (через mock dispatcher)
 # ============================================================
 
 
 class TestAudit:
-    """Проверка аудит-логирования."""
+    """Проверка аудит-метаданных (аудит-логирование теперь на уровне SmartDispatcher)."""
 
-    def test_audit_success(self, caplog):
-        with caplog.at_level(logging.INFO):
-            validated_task(data=[1, 2])
+    def test_audit_metadata_set(self):
+        """@task(audit=True) устанавливает audit метаданные."""
+        assert validated_task._task_audit is True
 
-        assert "Task completed" in caplog.text
-        assert "network_op" not in caplog.text  # metrics, не в логах
+    def test_audit_false_by_default(self):
+        """По умолчанию audit=False."""
+        assert cpu_task._task_audit is False
 
-    def test_audit_failure(self, caplog):
-        @task(type="cpu", audit=True, retry=0)
-        def failing() -> None:
-            raise RuntimeError("boom")
-
-        with caplog.at_level(logging.ERROR):
-            with pytest.raises(RuntimeError):
-                failing()
-
-        assert "Task failed" in caplog.text
+    def test_metrics_metadata_set(self):
+        """@task(metrics=...) устанавливает metrics метаданные."""
+        assert validated_task._task_metrics == "network_op"
 
 
 # ============================================================
@@ -242,3 +297,35 @@ class TestWraps:
 
     def test_preserves_module(self):
         assert cpu_task.__module__ == __name__
+
+
+# ============================================================
+# Тесты без dispatcher
+# ============================================================
+
+
+class TestNoDispatcher:
+    """Проверка: без SmartDispatcher — RuntimeError."""
+
+    def setup_method(self) -> None:
+        set_global_dispatcher(None)
+
+    def test_sync_task_raises(self):
+        @task(type="cpu")
+        def compute(x: int) -> int:
+            return x * 2
+
+        with pytest.raises(RuntimeError, match="SmartDispatcher not initialized"):
+            compute(5)
+
+    def test_async_task_raises(self):
+        @task(type="cpu")
+        async def async_compute(x: int) -> int:
+            return x * 3
+
+        with pytest.raises(RuntimeError, match="SmartDispatcher not initialized"):
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(async_compute(5))
+            finally:
+                loop.close()

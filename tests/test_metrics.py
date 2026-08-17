@@ -10,14 +10,13 @@ from monitoring.metrics import (
     # API
     api_calls_total,
     api_duration_seconds,
-    # Thread pool
-    threadpool_active,
-    threadpool_tasks_submitted_total,
     # Process pool
     processpool_spawned_total,
     processpool_killed_total,
     # Heartbeat
     heartbeat_missed_total,
+    # Worker manager
+    worker_manager_active,
     # Server
     MetricsServer,
 )
@@ -69,19 +68,19 @@ def test_histogram_multiple_observations():
 
 def test_gauge_set():
     """Gauge устанавливает значение через set()."""
-    threadpool_active.set(42)
-    assert threadpool_active._value.get() == 42
+    worker_manager_active.set(42)
+    assert worker_manager_active._value.get() == 42
 
 
 def test_gauge_inc_dec():
     """Gauge увеличивается и уменьшается."""
-    threadpool_active.set(0)
-    threadpool_active.inc()
-    assert threadpool_active._value.get() == 1
-    threadpool_active.inc()
-    assert threadpool_active._value.get() == 2
-    threadpool_active.dec()
-    assert threadpool_active._value.get() == 1
+    worker_manager_active.set(0)
+    worker_manager_active.inc()
+    assert worker_manager_active._value.get() == 1
+    worker_manager_active.inc()
+    assert worker_manager_active._value.get() == 2
+    worker_manager_active.dec()
+    assert worker_manager_active._value.get() == 1
 
 
 # === MetricsServer ===
@@ -93,7 +92,7 @@ def test_metrics_server_start():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("", 0))
         port = s.getsockname()[1]
-    
+
     server = MetricsServer(port=port)
     server.start()
     server.stop()
@@ -114,14 +113,13 @@ def test_all_metrics_exist():
         # API
         "api_calls_total": (Counter, api_calls_total),
         "api_duration_seconds": (Histogram, api_duration_seconds),
-        # Thread pool
-        "threadpool_active": (Gauge, threadpool_active),
-        "threadpool_tasks_submitted_total": (Counter, threadpool_tasks_submitted_total),
         # Process pool
         "processpool_spawned_total": (Counter, processpool_spawned_total),
         "processpool_killed_total": (Counter, processpool_killed_total),
         # Heartbeat
         "heartbeat_missed_total": (Counter, heartbeat_missed_total),
+        # Worker manager
+        "worker_manager_active": (Gauge, worker_manager_active),
     }
 
     for name, (expected_type, metric) in metrics.items():
@@ -136,20 +134,19 @@ def test_metric_prefixes():
     """Все метрики имеют правильные префиксы слоёв."""
     expected_prefixes = [
         "api_",
-        "threadpool_",
         "processpool_",
         "heartbeat_",
+        "worker_manager_",
     ]
 
     # Собираем все имена метрик из модуля
     all_metric_names = [
         api_calls_total._name,
         api_duration_seconds._name,
-        threadpool_active._name,
-        threadpool_tasks_submitted_total._name,
         processpool_spawned_total._name,
         processpool_killed_total._name,
         heartbeat_missed_total._name,
+        worker_manager_active._name,
     ]
 
     for name in all_metric_names:

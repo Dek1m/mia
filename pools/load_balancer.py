@@ -40,15 +40,18 @@ class LoadBalancer:
         self.MAX_ACTIVE_TASKS = cfg.get_value("pools.load_balancer.max_active_tasks", 10)
         self._workers: dict[int, WorkerState] = {}
 
-    def select_worker(self, workers: dict[int, WorkerState]) -> int | None:
+    def select_worker(self, workers: dict[int, WorkerState] | None = None) -> int | None:
         """Выбрать воркер с наименьшим score.
 
         Args:
-            workers: dict[worker_id, WorkerState].
+            workers: dict[worker_id, WorkerState]. Если None — использует внутренний кеш.
 
         Returns:
             worker_id или None если нет доступных.
         """
+        if workers is None:
+            workers = self._workers
+
         if not workers:
             loadbalancer_no_worker_total.inc()
             return None
@@ -75,6 +78,18 @@ class LoadBalancer:
     def update_worker_state(self, worker_id: int, state: WorkerState) -> None:
         """Обновить состояние воркера."""
         self._workers[worker_id] = state
+
+    def increment_active(self, worker_id: int) -> None:
+        """Увеличить счётчик активных задач воркера."""
+        state = self._workers.get(worker_id)
+        if state is not None:
+            state.active_tasks += 1
+
+    def decrement_active(self, worker_id: int) -> None:
+        """Уменьшить счётчик активных задач воркера."""
+        state = self._workers.get(worker_id)
+        if state is not None:
+            state.active_tasks = max(0, state.active_tasks - 1)
 
     def _score(self, state: WorkerState) -> float:
         """Вычислить score воркера. Меньше — лучше."""

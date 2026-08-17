@@ -220,7 +220,6 @@ def test_all_modules_use_argenta_logging():
         "pools.load_balancer",
         "pools.cpu_metrics",
         "pools.cpu_affinity",
-        "pools.thread_pool",
         "modules_system.module_manager",
         "modules_system.module_registry",
         "modules_system.module_base",

@@ -20,7 +20,6 @@ from core.factories import (
     HeartbeatFactory,
     CpuMetricsCollectorFactory,
     CacheFactory,
-    ThreadPoolFactory,
 )
 from modules_system.verification import VerificationMode
 
@@ -113,19 +112,6 @@ class TestFactoryIntegration:
         MiaConfig.reset()
         collector = CpuMetricsCollectorFactory.create()
         assert collector._collect_interval == 3.0
-
-    def test_thread_pool_factory_default(self):
-        """ThreadPoolFactory: max_workers=None из config (=cpu_count)."""
-        pool = ThreadPoolFactory.create()
-        # max_workers=None означает число ядер CPU
-        assert pool._max_workers is None or pool._max_workers == os.cpu_count()
-
-    def test_thread_pool_factory_from_config(self, monkeypatch):
-        """ThreadPoolFactory: ENV MIA_THREAD_POOL_MAX_WORKERS=4."""
-        monkeypatch.setenv("MIA_THREAD_POOL_MAX_WORKERS", "4")
-        MiaConfig.reset()
-        pool = ThreadPoolFactory.create()
-        assert pool._max_workers == 4
 
 
 # ── Тесты verification_mode priority ───────────────────────────────

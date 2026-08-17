@@ -19,8 +19,6 @@ import pytest
 from core.task import Task, TaskStatus, TaskType
 from core.task_store import TaskStore
 from core.stats_batch_writer import StatsBatchWriter
-from core.task_classifier import TaskClassifier
-from core.adaptive_router import AdaptiveRouter
 from pools.smart_dispatcher import SmartDispatcher
 from modules.db.provider import DatabaseProvider, db_method, _resolve_cache_key
 from modules.db.config import DatabaseConfig
@@ -756,18 +754,6 @@ class TestSmartDispatcherIntegration:
         assert provider.get._task_timeout == 5.0
         assert provider.insert._task_timeout == 10.0
         assert provider.transaction._task_timeout == 30.0
-
-    @pytest.mark.asyncio
-    async def test_classifier_classifies_db_provider_tasks(
-        self, task_store: TaskStore,
-    ) -> None:
-        """TaskClassifier корректно классифицирует задачи db.provider."""
-        classifier = TaskClassifier()
-
-        t = Task.create(module_id="db.provider", fn_name="get", task_type=TaskType.IO)
-        result = classifier.classify(t, provider_get_stub)
-        # stub не имеет _task_type, classifier определяет по module_id="db.provider"
-        assert result in (TaskType.IO, TaskType.DATABASE, TaskType.UNKNOWN)
 
 
 def provider_get_stub(table: str, id: str) -> dict | None:

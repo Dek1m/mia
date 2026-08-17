@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any
 from argenta_logging import get_logger
 from core.interfaces import (
-    ICache, IThreadPool, IEventBus, IHeartbeatMonitor,
+    ICache, IEventBus, IHeartbeatMonitor,
     ICpuMetricsCollector, ILoadBalancer, IWorkerManager, IDatabase,
 )
 
@@ -42,17 +42,6 @@ class CacheFactory:
                 default_ttl=kwargs.get("default_ttl", 300),
             )
         raise ValueError(f"Unknown cache backend: {backend}")
-
-
-class ThreadPoolFactory:
-    """Фабрика пулов потоков."""
-
-    @staticmethod
-    def create(max_workers: int | None = None) -> IThreadPool:
-        from pools.thread_pool import ThreadPoolManager
-        if max_workers is None:
-            max_workers = _cfg().get_value("pools.thread_pool.max_workers")
-        return ThreadPoolManager(max_workers=max_workers)
 
 
 class EventBusFactory:
@@ -105,12 +94,15 @@ class WorkerManagerFactory:
     def create(
         load_balancer: Any | None = None,
         heartbeat_monitor: Any | None = None,
+        shared_memory: Any | None = None,
     ) -> IWorkerManager:
         from pools.worker_manager import WorkerManager
         from pools.load_balancer import LoadBalancer
+        from core.shared_memory import SharedMemoryManager
         return WorkerManager(
             load_balancer=load_balancer or LoadBalancer(),
             heartbeat_monitor=heartbeat_monitor,
+            shared_memory=shared_memory or SharedMemoryManager(),
         )
 
 
@@ -126,8 +118,14 @@ class DatabaseFactory:
     def create_with_task_system(
         cache: Any | None = None,
         dispatcher: Any | None = None,
+        task_store: Any | None = None,
     ) -> tuple[IDatabase, Any, Any]:
         """Создать Database с подключённым Universal Task System.
+
+        Args:
+            cache: Кеш-бэкенд.
+            dispatcher: SmartDispatcher.
+            task_store: Готовый TaskStore. Если None — создаётся новый.
 
         Returns:
             (database, task_store, stats_writer)
@@ -136,7 +134,8 @@ class DatabaseFactory:
         from core.task_store import TaskStore
         from core.stats_batch_writer import StatsBatchWriter
 
-        task_store = TaskStore()
+        if task_store is None:
+            task_store = TaskStore()
         database = Database(
             cache=cache,
             dispatcher=dispatcher,

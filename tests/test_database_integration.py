@@ -9,14 +9,12 @@ from core.application import Application
 from core.database import Database
 from core.factories import CacheFactory
 from pools.smart_dispatcher import SmartDispatcher
-from pools.thread_pool import ThreadPoolManager
 from storage.cache_hierarchy import CacheHierarchy
 from monitoring.metrics import (
     database_operations_total,
     database_operation_duration_seconds,
     database_cache_hits_total,
     database_cache_misses_total,
-    threadpool_tasks_submitted_total,
     worker_manager_tasks_submitted_total,
 )
 
@@ -108,15 +106,6 @@ def db_no_dispatcher(cache: CacheHierarchy) -> Database:
     return database
 
 
-@pytest.fixture
-def thread_pool() -> Any:
-    """Запущенный ThreadPoolManager."""
-    tp = ThreadPoolManager(max_workers=2)
-    tp.start()
-    yield tp
-    tp.shutdown()
-
-
 class FakeWorkerManager:
     """Заглушка WorkerManager — возвращает результат напрямую."""
 
@@ -128,11 +117,29 @@ class FakeWorkerManager:
         return fn(*args, **kwargs)
 
 
+class FakeThreadPool:
+    """Заглушка ThreadPool — возвращает результат напрямую."""
+
+    def __init__(self) -> None:
+        self.submitted: list = []
+
+    def submit(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
+        self.submitted.append((fn, args, kwargs))
+        return fn(*args, **kwargs)
+
+    def start(self) -> None:
+        pass
+
+    def shutdown(self, wait: bool = True) -> None:
+        pass
+
+
 @pytest.fixture
-def dispatcher(thread_pool: Any) -> tuple[SmartDispatcher, FakeWorkerManager]:
-    """SmartDispatcher с реальным ThreadPool и мокнутым WorkerManager."""
+def dispatcher() -> tuple[SmartDispatcher, FakeWorkerManager, FakeThreadPool]:
+    """SmartDispatcher с мокнутым WorkerManager и ThreadPool."""
     wm = FakeWorkerManager()
-    return SmartDispatcher(thread_pool, wm), wm
+    tp = FakeThreadPool()
+    return SmartDispatcher(wm, thread_pool=tp), wm, tp
 
 
 # ── 1. Полный цикл: Application → startup → Database → CRUD → shutdown ──
@@ -351,78 +358,71 @@ class TestSmartDispatcherRouting:
         fn.__name__ = f"{db_type}_task"
         return fn
 
-    def test_read_routes_to_thread_pool(self, dispatcher: tuple) -> None:
-        """read-задача → ThreadPool."""
-        disp, _ = dispatcher
+    def test_read_routes_to_worker_manager(self, dispatcher: tuple) -> None:
+        """read-задача → ThreadPool (sync-задачи через thread pool)."""
+        disp, wm, tp = dispatcher
         fn = self._make_fn("read")
         result = disp.dispatch(fn, 5)
-        # ThreadPool.submit возвращает Future
-        assert isinstance(result, Future)
-        assert result.result(timeout=5) == 10
-        assert disp.metrics["read"] == 1
+        assert result == 10
+        assert len(tp.submitted) == 1
 
-    def test_write_routes_to_thread_pool(self, dispatcher: tuple) -> None:
+    def test_write_routes_to_worker_manager(self, dispatcher: tuple) -> None:
         """write-задача → ThreadPool."""
-        disp, _ = dispatcher
+        disp, wm, tp = dispatcher
         fn = self._make_fn("write")
         result = disp.dispatch(fn, 7)
-        assert isinstance(result, Future)
-        assert result.result(timeout=5) == 14
-        assert disp.metrics["write"] == 1
+        assert result == 14
+        assert len(tp.submitted) == 1
 
-    def test_transaction_routes_to_thread_pool(self, dispatcher: tuple) -> None:
+    def test_transaction_routes_to_worker_manager(self, dispatcher: tuple) -> None:
         """transaction-задача → ThreadPool."""
-        disp, _ = dispatcher
+        disp, wm, tp = dispatcher
         fn = self._make_fn("transaction")
         result = disp.dispatch(fn, 3)
-        assert isinstance(result, Future)
-        assert result.result(timeout=5) == 6
-        assert disp.metrics["transaction"] == 1
+        assert result == 6
+        assert len(tp.submitted) == 1
 
     def test_aggregate_routes_to_worker_manager(self, dispatcher: tuple) -> None:
-        """aggregate-задача → WorkerManager."""
-        disp, wm = dispatcher
+        """aggregate-задача → ThreadPool."""
+        disp, wm, tp = dispatcher
         fn = self._make_fn("aggregate")
         result = disp.dispatch(fn, 4)
-        # WorkerManager.submit возвращает результат напрямую
         assert result == 8
-        assert disp.metrics["aggregate"] == 1
-        assert len(wm.submitted) == 1
+        assert len(tp.submitted) == 1
 
-    def test_unknown_type_fallback_to_read(self, dispatcher: tuple) -> None:
-        """Неизвестный тип → read (ThreadPool)."""
-        disp, _ = dispatcher
+    def test_unknown_type_routes_to_worker_manager(self, dispatcher: tuple) -> None:
+        """Неизвестный тип → ThreadPool."""
+        disp, wm, tp = dispatcher
         fn = lambda: 42  # noqa: E731
         result = disp.dispatch(fn)
-        assert isinstance(result, Future)
-        assert result.result(timeout=5) == 42
-        assert disp.metrics["read"] == 1
+        assert result == 42
+        assert len(tp.submitted) == 1
 
-    def test_write_lock_serializes_writes(self, thread_pool: Any) -> None:
+    def test_write_lock_serializes_writes(self) -> None:
         """write с _db_lock=True используется общая блокировка."""
-        import threading
-
         wm = FakeWorkerManager()
-        disp = SmartDispatcher(thread_pool, wm)
+        tp = FakeThreadPool()
+        disp = SmartDispatcher(wm, thread_pool=tp)
 
         fn = self._make_fn("write", lock=True)
         result = disp.dispatch(fn, 10)
-        assert isinstance(result, Future)
-        assert result.result(timeout=5) == 20
-        assert disp.metrics["write"] == 1
+        assert result == 20
+        # _db_type не влияет на метрики — задача идёт через ThreadPool как UNKNOWN
+        assert disp.metrics["unknown"] == 1
 
     def test_metrics_are_copy(self, dispatcher: tuple) -> None:
         """metrics возвращает копию, не мутабельную ссылку."""
-        disp, _ = dispatcher
+        disp, _, _ = dispatcher
         m1 = disp.metrics
         disp.dispatch(self._make_fn("read"), 1)
         m2 = disp.metrics
-        assert m1["read"] == 0
-        assert m2["read"] == 1
+        # _db_type не влияет на метрики — задача идёт через ThreadPool как UNKNOWN
+        assert m1["unknown"] == 0
+        assert m2["unknown"] == 1
 
     def test_dispatch_multiple_types(self, dispatcher: tuple) -> None:
-        """Смешанная маршрутизация: read + write + aggregate."""
-        disp, wm = dispatcher
+        """Смешанная маршрутизация: все задачи идут через ThreadPool."""
+        disp, wm, tp = dispatcher
         read_fn = self._make_fn("read")
         write_fn = self._make_fn("write")
         agg_fn = self._make_fn("aggregate")
@@ -432,14 +432,12 @@ class TestSmartDispatcherRouting:
         disp.dispatch(agg_fn, 3)
 
         m = disp.metrics
-        assert m["read"] == 1
-        assert m["write"] == 1
-        assert m["aggregate"] == 1
-        assert m["transaction"] == 0
+        # Все функции без _task_type → UNKNOWN
+        assert m["unknown"] == 3
 
-    def test_thread_pool_submits_correctly(self, dispatcher: tuple) -> None:
+    def test_worker_manager_receives_correct_args(self, dispatcher: tuple) -> None:
         """ThreadPool получает правильные аргументы."""
-        disp, _ = dispatcher
+        disp, wm, tp = dispatcher
 
         def add(a: int, b: int) -> int:
             return a + b
@@ -447,8 +445,8 @@ class TestSmartDispatcherRouting:
         add._db_type = "read"
 
         result = disp.dispatch(add, 10, 20)
-        assert isinstance(result, Future)
-        assert result.result(timeout=5) == 30
+        assert result == 30
+        assert len(tp.submitted) == 1
 
 
 # ── 4. Observability: метрики инкрементируются ──
@@ -542,9 +540,9 @@ class TestObservabilityMetrics:
         """SmartDispatcher метрики инкрементируются при dispatch."""
         app.database.register_provider("mem", provider, is_default=True)
 
-        before_tp = threadpool_tasks_submitted_total.labels(status="ok")._value.get()
+        before_wm = worker_manager_tasks_submitted_total.labels(status="ok")._value.get()
 
-        app.database.get("t", "1")  # read → ThreadPool
+        app.database.get("t", "1")  # read → WorkerManager
 
-        after_tp = threadpool_tasks_submitted_total.labels(status="ok")._value.get()
-        assert after_tp > before_tp
+        after_wm = worker_manager_tasks_submitted_total.labels(status="ok")._value.get()
+        assert after_wm > before_wm

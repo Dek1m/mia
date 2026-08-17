@@ -304,66 +304,37 @@ async def test_validate_skips_self() -> None:
 # ── Тесты: retry ──────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_retry_succeeds_on_second_attempt() -> None:
-    """Функция падает один раз, потомucceeds."""
-    call_count = 0
+def test_retry_metadata_set() -> None:
+    """@db_method(retry=2) устанавливает метаданные retry на функции."""
 
     @db_method(retry=2, retry_delay=0.01)
     async def flaky(self) -> str:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            raise ConnectionError("timeout")
         return "ok"
 
-    provider = FakeProvider()
-    result = await flaky(provider)
+    assert flaky._task_retry == 2
+    assert flaky._task_retry_delay == 0.01
 
-    assert result == "ok"
-    assert call_count == 2
+
+def test_retry_zero_metadata() -> None:
+    """@db_method(retry=0) устанавливает retry=0."""
+
+    @db_method(retry=0)
+    async def no_retry(self) -> str:
+        return "ok"
+
+    assert no_retry._task_retry == 0
 
 
 @pytest.mark.asyncio
-async def test_retry_exhausted() -> None:
-    """Все попытки исчерпаны — выбрасывается последняя ошибка."""
-    @db_method(retry=1, retry_delay=0.01)
+async def test_retry_error_propagates() -> None:
+    """Ошибка прокидывается через SmartDispatcher (retry на уровне декоратора удалён)."""
+    @db_method(retry=2, retry_delay=0.01)
     async def always_fail(self) -> str:
         raise RuntimeError("persistent failure")
 
     provider = FakeProvider()
     with pytest.raises(RuntimeError, match="persistent failure"):
         await always_fail(provider)
-
-
-@pytest.mark.asyncio
-async def test_retry_zero_no_retry() -> None:
-    """retry=0 — повторных попыток нет."""
-    call_count = 0
-
-    @db_method(retry=0)
-    async def fail_once(self) -> str:
-        nonlocal call_count
-        call_count += 1
-        raise ValueError("boom")
-
-    provider = FakeProvider()
-    with pytest.raises(ValueError):
-        await fail_once(provider)
-
-    assert call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_retry_preserves_exception_type() -> None:
-    """Retry сохраняет тип исключения."""
-    @db_method(retry=1, retry_delay=0.01)
-    async def fail(self) -> str:
-        raise KeyError("missing_key")
-
-    provider = FakeProvider()
-    with pytest.raises(KeyError):
-        await fail(provider)
 
 
 # ── Тесты: _resolve_cache_key ────────────────────────

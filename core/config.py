@@ -36,13 +36,13 @@ _ENV_TO_DOTPATH: dict[str, str] = {
     "MIA_WORKER_STOP_TIMEOUT": "pools.worker.stop_timeout",
     "MIA_DATABASE_LIST_LIMIT": "core.database.list_limit",
     "MIA_MODULE_MAX_INIT_SIZE": "modules.max_init_size",
+    "MIA_ROUTING_STATS_UPDATE_INTERVAL": "core.routing.stats_update_interval",
     "MIA_LB_WEIGHT_CPU": "pools.load_balancer.weight_cpu",
     "MIA_LB_WEIGHT_TASKS": "pools.load_balancer.weight_tasks",
     "MIA_LB_WEIGHT_STALE": "pools.load_balancer.weight_stale",
     "MIA_LB_MAX_ACTIVE_TASKS": "pools.load_balancer.max_active_tasks",
     "MIA_CPU_COLLECT_INTERVAL": "pools.cpu_metrics.collect_interval",
     "MIA_WORKER_HEARTBEAT_PERIOD": "pools.worker.heartbeat_period",
-    "MIA_THREAD_POOL_MAX_WORKERS": "pools.thread_pool.max_workers",
     "MIA_RETRY_MAX_ATTEMPTS": "resilience.retry.max_attempts",
     "MIA_RETRY_BASE_DELAY": "resilience.retry.base_delay",
     "MIA_RETRY_MAX_DELAY": "resilience.retry.max_delay",
@@ -60,6 +60,7 @@ _ENV_TO_DOTPATH: dict[str, str] = {
 _NUMERIC_KEYS: set[str] = {
     "core.routing.p95_threshold",
     "core.routing.history_window",
+    "core.routing.stats_update_interval",
     "core.task_store.max_size",
     "core.task_store.history_limit",
     "core.stats_writer.batch_size",
@@ -78,7 +79,6 @@ _NUMERIC_KEYS: set[str] = {
     "pools.load_balancer.max_active_tasks",
     "pools.cpu_metrics.collect_interval",
     "pools.worker.heartbeat_period",
-    "pools.thread_pool.max_workers",
     "resilience.retry.max_attempts",
     "resilience.retry.base_delay",
     "resilience.retry.max_delay",
@@ -165,6 +165,7 @@ class MiaConfig:
                 "routing": {
                     "p95_threshold": 0.1,
                     "history_window": 1000,
+                    "stats_update_interval": 100,
                 },
                 "task_store": {
                     "max_size": 25000,
@@ -200,9 +201,6 @@ class MiaConfig:
                 "worker": {
                     "heartbeat_period": 5.0,
                     "stop_timeout": 5.0,
-                },
-                "thread_pool": {
-                    "max_workers": None,
                 },
             },
             "resilience": {
@@ -371,12 +369,7 @@ def _set_by_dotpath(data: dict[str, Any], dotpath: str, value: Any) -> None:
 
 
 def _cast_env_value(value: str, dotpath: str) -> Any:
-    """Привести строковое значение ENV к нужному типу.
-
-    Для null/None возвращается None (для max_workers).
-    """
-    if dotpath == "pools.thread_pool.max_workers" and value.lower() in ("null", "none", ""):
-        return None
+    """Привести строковое значение ENV к нужному типу."""
     if dotpath in _NUMERIC_KEYS:
         try:
             if "." in value:

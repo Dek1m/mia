@@ -8,7 +8,39 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 _project_root = Path(__file__).resolve().parent
+
+
+# ── Глобальный mock SmartDispatcher для тестов ────────────────
+
+class _FakeWorkerManager:
+    """Синхронный WorkerManager для тестов."""
+
+    def __init__(self) -> None:
+        self.submitted: list = []
+
+    def submit(self, fn, *args, **kwargs):
+        self.submitted.append((fn, args, kwargs))
+        return fn(*args, **kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _global_dispatcher():
+    """Установить mock SmartDispatcher для всех тестов.
+
+    Гарантирует что @task и @db_method декораторы работают
+    даже без Application.startup().
+    """
+    from core.task_decorator import set_global_dispatcher
+    from pools.smart_dispatcher import SmartDispatcher
+
+    wm = _FakeWorkerManager()
+    dp = SmartDispatcher(wm)
+    set_global_dispatcher(dp)
+    yield dp
+    set_global_dispatcher(None)
 
 
 def _register_package(pkg_name: str, module_dir: Path, submodules: list[str] | None = None) -> None:
