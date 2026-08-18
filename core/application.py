@@ -10,7 +10,7 @@ import threading
 from typing import Any
 from argenta_logging import get_logger
 from core.interfaces import (
-    ICache, IEventBus,
+    ICache, IEventBus, ILogger,
     IHeartbeatMonitor, IModuleRegistry, IServiceProvider,
     ICpuMetricsCollector, ILoadBalancer, IWorkerManager, IDatabase,
     ISmartDispatcher,
@@ -153,6 +153,12 @@ class Application:
         # API Proxy
         self._api_proxy = ApiProxy(dispatcher=smart_dispatcher)
 
+        # Загружаем Log модуль ПЕРВЫМ (чтобы остальные модули могли использовать state.log)
+        from modules.log import LogModule
+        log_module = LogModule()
+        log_module.on_load(self)
+        self._api_proxy.register_module(log_module)
+
         # Shutdown Manager
         self._shutdown_manager = ShutdownManager()
 
@@ -209,6 +215,11 @@ class Application:
     def api(self) -> ApiProxy:
         """Доступ к API модулей."""
         return self._api_proxy
+
+    @property
+    def log(self) -> ILogger:
+        """Доступ к логгеру."""
+        return self._services.resolve(ILogger)
 
     @property
     def cache(self) -> ICache:
