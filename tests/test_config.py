@@ -483,8 +483,8 @@ class TestEnvMapping:
     """Таблица _ENV_TO_DOTPATH."""
 
     def test_env_mapping_count(self):
-        """Таблица содержит 30 записи (удалены 2 task_store)."""
-        assert len(_ENV_TO_DOTPATH) == 30
+        """Таблица содержит 40 записей (30 базовых + 10 worker thread_pool)."""
+        assert len(_ENV_TO_DOTPATH) == 40
 
     def test_env_mapping_compound_names(self):
         """Составные имена маппятся корректно (max_active_tasks, check_interval)."""
@@ -495,7 +495,15 @@ class TestEnvMapping:
     def test_numeric_keys_count(self):
         """_NUMERIC_KEYS содержит все числовые dotpath."""
         # Все dotpath из _ENV_TO_DOTPATH кроме строковых
-        string_keys = {"modules.dir", "storage.cache.backend", "modules.verification.mode"}
+        string_keys = {
+            "modules.dir",
+            "storage.cache.backend",
+            "modules.verification.mode",
+            "pools.worker.count",
+            "pools.worker.cpu_affinity",
+            "pools.worker.thread_pool.mode",
+            "pools.worker.thread_pool.workload_type",
+        }
         expected_numeric = set(_ENV_TO_DOTPATH.values()) - string_keys
         assert _NUMERIC_KEYS == expected_numeric
 

@@ -15,17 +15,25 @@ class WorkerThreadPool(IWorkerThreadPool):
     """Пул потоков внутри worker-процесса.
 
     Каждый воркер создаёт свой ThreadPool для параллельного
-    выполнения задач внутри процесса.
+    выполнения задач внутри процесса. Конфигурация через config.
 
     Attributes:
         max_threads: Максимальное количество потоков в пуле.
+        workload_type: Тип нагрузки (io_bound / cpu_bound).
+        target_utilization: Целевая утилизация (0.0-1.0).
     """
 
-    def __init__(self, max_threads: int = 4) -> None:
+    def __init__(self, max_threads: int | None = None) -> None:
         from core.config import MiaConfig
         cfg = MiaConfig.get()
-        self._max_threads = cfg.get_value("pools.worker.thread_pool.max_threads", max_threads)
+        if max_threads is not None:
+            self._max_threads = max_threads
+        else:
+            self._max_threads = cfg.get_value("pools.worker.thread_pool.max_threads", 4)
+        self._workload_type = cfg.get_value("pools.worker.thread_pool.workload_type", "io_bound")
+        self._target_utilization = cfg.get_value("pools.worker.thread_pool.target_utilization", 0.75)
         self._executor: ThreadPoolExecutor | None = None
+        self._shutdown_event = threading.Event()
         self._lock = threading.Lock()
         self._active_count = 0
         self._active_lock = threading.Lock()
@@ -36,8 +44,16 @@ class WorkerThreadPool(IWorkerThreadPool):
             if self._executor is not None:
                 log.warning("WorkerThreadPool already started")
                 return
+            self._shutdown_event.clear()
             self._executor = ThreadPoolExecutor(max_workers=self._max_threads)
-            log.info("WorkerThreadPool started", extra={"max_threads": self._max_threads})
+            log.info(
+                "WorkerThreadPool started",
+                extra={
+                    "max_threads": self._max_threads,
+                    "workload_type": self._workload_type,
+                    "target_utilization": self._target_utilization,
+                },
+            )
 
     def submit(self, fn: Callable, *args: Any, **kwargs: Any) -> Future:
         """Отправить задачу на выполнение.
@@ -51,8 +67,10 @@ class WorkerThreadPool(IWorkerThreadPool):
             Future с результатом выполнения.
 
         Raises:
-            RuntimeError: Если пул не запущен.
+            RuntimeError: Если пул не запущен или происходит graceful shutdown.
         """
+        if self._shutdown_event.is_set():
+            raise RuntimeError("WorkerThreadPool is shutting down")
         if self._executor is None:
             raise RuntimeError("WorkerThreadPool not started. Call start() first.")
 
@@ -69,7 +87,10 @@ class WorkerThreadPool(IWorkerThreadPool):
         return self._executor.submit(_wrapper)
 
     def shutdown(self, wait: bool = True) -> None:
-        """Остановить пул потоков.
+        """Остановить пул потоков (graceful shutdown).
+
+        Сначала помечает пул как завершающийся (новые задачи отклоняются),
+        затем останавливает executor.
 
         Args:
             wait: Ждать завершения всех задач.
@@ -77,6 +98,7 @@ class WorkerThreadPool(IWorkerThreadPool):
         with self._lock:
             if self._executor is None:
                 return
+            self._shutdown_event.set()
             self._executor.shutdown(wait=wait)
             self._executor = None
             log.info("WorkerThreadPool stopped")
@@ -88,6 +110,22 @@ class WorkerThreadPool(IWorkerThreadPool):
             return self._active_count
 
     @property
+    def free_threads(self) -> int:
+        """Количество свободных потоков (max - active)."""
+        with self._active_lock:
+            return max(0, self._max_threads - self._active_count)
+
+    @property
     def max_threads(self) -> int:
         """Максимальное количество потоков."""
         return self._max_threads
+
+    @property
+    def workload_type(self) -> str:
+        """Тип нагрузки (io_bound / cpu_bound)."""
+        return self._workload_type
+
+    @property
+    def target_utilization(self) -> float:
+        """Целевая утилизация (0.0-1.0)."""
+        return self._target_utilization

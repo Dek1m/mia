@@ -248,6 +248,12 @@ class IWorkerThreadPool(ABC):
         """Количество активных задач."""
         ...
 
+    @property
+    @abstractmethod
+    def free_threads(self) -> int:
+        """Количество свободных потоков."""
+        ...
+
 
 class IDatabase(ABC):
     """Интерфейс Database — контракт для провайдеров."""

@@ -23,12 +23,15 @@ class WorkerState:
     stale_penalty: float = 0.0
     last_heartbeat: float = 0.0
     core_id: int = 0
+    free_threads: int = 0
+    max_threads: int = 1
 
 
 class LoadBalancer:
-    """Weighted scoring: score = 0.7 × cpu_load + 0.2 × active_tasks + 0.1 × stale_penalty.
+    """Weighted scoring: score = 0.7 × cpu_load + 0.3 × (1 - free_ratio).
 
     Чем меньше score — тем лучше воркер.
+    Учитывает свободные потоки: меньше свободных → хуже.
     """
 
     def __init__(self) -> None:
@@ -92,10 +95,14 @@ class LoadBalancer:
             state.active_tasks = max(0, state.active_tasks - 1)
 
     def _score(self, state: WorkerState) -> float:
-        """Вычислить score воркера. Меньше — лучше."""
-        normalized_tasks = min(state.active_tasks / self.MAX_ACTIVE_TASKS, 1.0)
+        """Вычислить score воркера. Меньше — лучше.
+
+        Формула: 0.7 × cpu_load + 0.3 × (1 - free_ratio).
+        free_ratio = free_threads / max(max_threads, 1).
+        Чем меньше свободных потоков — тем хуже (выше score).
+        """
+        free_ratio = state.free_threads / max(state.max_threads, 1)
         return (
             self.WEIGHT_CPU * state.cpu_load
-            + self.WEIGHT_TASKS * normalized_tasks
-            + self.WEIGHT_STALE * state.stale_penalty
+            + 0.3 * (1 - free_ratio)
         )
