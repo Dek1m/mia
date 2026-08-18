@@ -1,8 +1,10 @@
 """Модуль уведомлений — пример использования EventBus."""
-from modules_system.module_base import ModuleBase
+from modules_system.module_base import ModuleBase, ModuleMeta
 from argenta_logging import get_logger
 
 log = get_logger(__name__)
+
+MODULE_VERSION = "1.0.0"
 
 
 class NotificationsModule(ModuleBase):
@@ -11,6 +13,14 @@ class NotificationsModule(ModuleBase):
     @property
     def name(self) -> str:
         return "notifications"
+
+    @property
+    def version(self) -> str:
+        return MODULE_VERSION
+
+    @property
+    def meta(self) -> ModuleMeta:
+        return ModuleMeta()
 
     def on_load(self, state: "Application") -> None:  # noqa: F821
         self._state = state

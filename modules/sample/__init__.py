@@ -1,5 +1,5 @@
 """Тестовый модуль — пример использования."""
-from modules_system.module_base import ModuleBase, api_method
+from modules_system.module_base import ModuleBase, ModuleMeta, api_method
 from argenta_logging import get_logger
 
 log = get_logger(__name__)
@@ -15,6 +15,10 @@ class SampleModule(ModuleBase):
     @property
     def version(self) -> str:
         return MODULE_VERSION
+    
+    @property
+    def meta(self) -> ModuleMeta:
+        return ModuleMeta()
     
     def on_load(self, state):
         log.info("sample_module_loaded", extra={"state_type": type(state).__name__})
