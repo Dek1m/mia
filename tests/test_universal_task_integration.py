@@ -342,106 +342,107 @@ class TestApiProxyDispatch:
         assert isinstance(methods, list)
 
 
-# ── 6. modules/db: transaction() НЕ сломан ──
+# ── 6. modules/db: transaction() — sync context manager ──
 
 
 class TestDbTransaction:
-    """Проверка: transaction() корректно работает как async context manager."""
+    """Проверка: transaction() корректно работает как sync context manager."""
 
-    def test_transaction_is_async_context_manager(self) -> None:
-        """transaction() должен быть async context manager, НЕ coroutine."""
+    def test_transaction_is_context_manager(self) -> None:
+        """transaction() должен быть sync context manager (psycopg v3)."""
         from modules.db.provider import DatabaseProvider
         from modules.db.config import DatabaseConfig
 
         config = DatabaseConfig()
 
         mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
 
         mock_conn_tx = MagicMock()
-        mock_conn_tx.__aenter__ = AsyncMock(return_value=mock_conn)
-        mock_conn_tx.__aexit__ = AsyncMock(return_value=False)
-        mock_conn_tx.__aenter__ = AsyncMock(return_value=mock_conn)
-        mock_conn_tx.__aexit__ = AsyncMock(return_value=False)
+        mock_conn_tx.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn_tx.__exit__ = MagicMock(return_value=False)
 
         pool = MagicMock()
-        pool.acquire.return_value = mock_conn_tx
+        pool.connection.return_value = mock_conn_tx
 
         provider = DatabaseProvider(pool=pool, config=config)
 
-        # transaction() должен вернуть async context manager
         cm = provider.transaction()
 
-        is_coroutine = asyncio.iscoroutine(cm)
-        is_acm = hasattr(cm, "__aenter__") and hasattr(cm, "__aexit__")
+        # transaction() должен вернуть sync context manager
+        is_cm = hasattr(cm, "__enter__") and hasattr(cm, "__exit__")
+        assert is_cm, (
+            f"transaction() вернул неожиданный тип: {type(cm)}. "
+            "Ожидался sync context manager."
+        )
 
-        if is_coroutine:
-            cm.close()
-            pytest.fail(
-                "transaction() возвращает coroutine вместо async context manager. "
-                "@db_method ломает @asynccontextmanager. "
-                "async with provider.transaction() as conn: → TypeError."
-            )
-        elif is_acm:
-            async def _test_enter_exit() -> None:
-                async with provider.transaction() as conn:
-                    assert conn is not None
-            loop = asyncio.new_event_loop()
-            try:
-                loop.run_until_complete(_test_enter_exit())
-            finally:
-                loop.close()
-        else:
-            pytest.fail(
-                f"transaction() вернул неожиданный тип: {type(cm)}. "
-                "Ожидался async context manager."
-            )
+        # Проверяем вход/выход
+        with provider.transaction() as conn:
+            assert conn is mock_conn
 
-    def test_db_method_breaks_asynccontextmanager(self) -> None:
-        """@db_method + @asynccontextmanager = async context manager (FIXED)."""
+    def test_transaction_is_sync_context_manager(self) -> None:
+        """transaction() — sync context manager, НЕ async."""
         from modules.db.provider import DatabaseProvider
         from modules.db.config import DatabaseConfig
 
         config = DatabaseConfig()
-        pool = AsyncMock()
+        pool = MagicMock()
+        pool.connection.return_value.__enter__ = MagicMock(return_value=MagicMock())
+        pool.connection.return_value.__exit__ = MagicMock(return_value=False)
         provider = DatabaseProvider(pool=pool, config=config)
 
         result = provider.transaction()
 
+        # Не coroutine
         assert not asyncio.iscoroutine(result), (
             "transaction() не должен возвращать coroutine"
         )
-        assert hasattr(result, "__aenter__") and hasattr(result, "__aexit__"), (
-            "transaction() должен возвращать async context manager"
+        # sync context manager
+        assert hasattr(result, "__enter__") and hasattr(result, "__exit__"), (
+            "transaction() должен возвращать sync context manager"
         )
 
     def test_database_provider_crud_works(self) -> None:
-        """DatabaseProvider CRUD-методы работают через @db_method + @task."""
+        """DatabaseProvider CRUD-методы работают (sync API)."""
         from modules.db.provider import DatabaseProvider
         from modules.db.config import DatabaseConfig
 
         config = DatabaseConfig()
-        pool = AsyncMock()
 
-        pool.fetchval.return_value = "test-id-1"
-        pool.fetchrow.return_value = {"id": "test-id-1", "name": "Alice"}
-        pool.fetch.return_value = [{"id": "test-id-1", "name": "Alice"}]
-        pool.execute.return_value = "DELETE 1"
+        # Мок cursor для psycopg v3
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = ("test-id-1",)
+        mock_cursor.fetchall.return_value = [
+            ("test-id-1", "Alice"),
+        ]
+        mock_cursor.description = [("id",), ("name",)]
+        mock_cursor.rowcount = 1
+        mock_cursor.statusmessage = "INSERT 0 1"
+        mock_cursor.__enter__ = MagicMock(return_value=mock_cursor)
+        mock_cursor.__exit__ = MagicMock(return_value=False)
+
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+
+        pool = MagicMock()
+        pool.connection.return_value = mock_conn
 
         provider = DatabaseProvider(pool=pool, config=config)
 
-        loop = asyncio.new_event_loop()
-        try:
-            id_ = loop.run_until_complete(
-                provider.insert("users", {"name": "Alice"})
-            )
-            assert id_ == "test-id-1"
+        # Sync insert
+        id_ = provider.insert("users", {"name": "Alice"})
+        # cursor.fetchone вернул ("test-id-1",), берем первый элемент
+        assert id_ == "test-id-1"
 
-            user = loop.run_until_complete(
-                provider.get("users", "test-id-1")
-            )
-            assert user["name"] == "Alice"
-        finally:
-            loop.close()
+        # Меняем cursor для get
+        mock_cursor.fetchone.return_value = ("test-id-1", "Alice")
+        mock_cursor.description = [("id",), ("name",)]
+
+        user = provider.get("users", "test-id-1")
+        assert user["name"] == "Alice"
 
 
 # ── 7. Метрики: threadpool_tasks_submitted_total инкрементируется ──

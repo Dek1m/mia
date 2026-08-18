@@ -357,9 +357,9 @@ class Application:
             raise ModuleLoadError(f"Failed to load module '{name}': {e}") from e
 
     def load_all_modules(self) -> None:
-        """Автозагрузка всех модулей."""
+        """Автозагрузка всех модулей в топологическом порядке."""
         registry = self._services.resolve(IModuleRegistry)
-        discovered = registry.discover()
+        discovered = registry.discover_and_sort()
         log.info("Auto-scanning modules", extra={"count": len(discovered)})
 
         for name in discovered:

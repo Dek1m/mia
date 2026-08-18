@@ -1,6 +1,7 @@
 """Менеджер модулей — автосканирование и загрузка."""
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib
 import importlib.util
@@ -11,7 +12,7 @@ from typing import Any
 
 from argenta_logging import get_logger
 
-from modules_system.module_base import ModuleBase
+from modules_system.module_base import ModuleBase, ModuleMeta
 from modules_system.verification import (
     VerificationError,
     VerificationMode,
@@ -78,6 +79,179 @@ class ModuleManager:
                         log.warning("Module not in whitelist, skipping", extra={"module_name": item.name})
             log.debug("Discovered modules", extra={"count": len(modules), "modules": modules})
             return sorted(modules)
+
+    def discover_and_sort(self) -> list[str]:
+        """Найти модули и отсортировать по зависимостям (Kahn's algorithm).
+
+        Returns:
+            Список имён модулей в топологическом порядке.
+
+        Raises:
+            ValueError: Если обнаружены циклические зависимости.
+        """
+        modules = self.discover()
+
+        # Строим граф зависимостей (без загрузки модулей)
+        # Фильтруем зависимости к несуществующим модулям — они не в графе
+        graph: dict[str, list[str]] = {}
+        for name in modules:
+            meta = self._read_meta(name)
+            graph[name] = [d for d in (meta.dependencies or []) if d in modules]
+
+        # Топологическая сортировка
+        sorted_modules = self._topological_sort(graph)
+        log.info(
+            "Modules sorted by dependencies",
+            extra={"count": len(sorted_modules), "order": sorted_modules},
+        )
+        return sorted_modules
+
+    def _read_meta(self, name: str) -> ModuleMeta:
+        """Прочитать ModuleMeta из __init__.py без загрузки модуля.
+
+        Использует AST для безопасного чтения метаданных.
+        Если парсинг не удался — возвращает ModuleMeta() по умолчанию.
+
+        Args:
+            name: Имя модуля.
+
+        Returns:
+            ModuleMeta с dependencies или пустой ModuleMeta.
+        """
+        init_path = self._dir / name / "__init__.py"
+        if not init_path.exists():
+            return ModuleMeta()
+
+        try:
+            source = init_path.read_text(encoding="utf-8")
+            tree = ast.parse(source)
+
+            # Ищем класс, наследующий ModuleBase, и его метод meta
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ClassDef):
+                    continue
+
+                # Проверяем, что класс наследует ModuleBase
+                has_module_base = False
+                for base in node.bases:
+                    if isinstance(base, ast.Name) and base.id == "ModuleBase":
+                        has_module_base = True
+                        break
+                    elif isinstance(base, ast.Attribute) and base.attr == "ModuleBase":
+                        has_module_base = True
+                        break
+
+                if not has_module_base:
+                    continue
+
+                # Ищем метод meta
+                for item in node.body:
+                    if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        continue
+                    if item.name != "meta":
+                        continue
+
+                    # Ищем return ModuleMeta(...) в теле метода
+                    for stmt in ast.walk(item):
+                        if not isinstance(stmt, ast.Return):
+                            continue
+                        if not isinstance(stmt.value, ast.Call):
+                            continue
+                        call = stmt.value
+                        # Проверяем что вызывается ModuleMeta
+                        if isinstance(call.func, ast.Name) and call.func.id == "ModuleMeta":
+                            return self._parse_module_meta_call(call)
+                        elif isinstance(call.func, ast.Attribute) and call.func.attr == "ModuleMeta":
+                            return self._parse_module_meta_call(call)
+
+        except Exception as exc:
+            log.debug(
+                "Failed to parse meta from module",
+                extra={"module_name": name, "error": str(exc)},
+            )
+
+        return ModuleMeta()
+
+    def _parse_module_meta_call(self, call: ast.Call) -> ModuleMeta:
+        """Распарсить вызов ModuleMeta(...) из AST.
+
+        Args:
+            call: AST-узел вызова ModuleMeta().
+
+        Returns:
+            Распарсенный ModuleMeta.
+        """
+        kwargs: dict[str, Any] = {}
+        for kw in call.keywords:
+            if kw.arg is None:
+                continue
+            value = self._ast_to_python(kw.value)
+            if value is not None:
+                kwargs[kw.arg] = value
+
+        return ModuleMeta(**kwargs)
+
+    def _ast_to_python(self, node: ast.expr) -> Any:
+        """Конвертировать AST-узел в Python-значение.
+
+        Поддерживает: строки, числа, списки, словари, None.
+
+        Args:
+            node: AST-узел значения.
+
+        Returns:
+            Python-значение или None если не удалось распарсить.
+        """
+        if isinstance(node, ast.Constant):
+            return node.value
+        elif isinstance(node, ast.List):
+            return [self._ast_to_python(elt) for elt in node.elts]
+        elif isinstance(node, ast.Dict):
+            result = {}
+            for key, value in zip(node.keys, node.values):
+                k = self._ast_to_python(key)
+                v = self._ast_to_python(value)
+                if k is not None:
+                    result[k] = v
+            return result
+        elif isinstance(node, ast.Name) and node.id == "None":
+            return None
+        return None
+
+    def _topological_sort(self, graph: dict[str, list[str]]) -> list[str]:
+        """Топологическая сортировка (Kahn's algorithm).
+
+        Args:
+            graph: Граф зависимостей {имя_модуля: [зависимости]}.
+
+        Returns:
+            Список имён модулей в топологическом порядке.
+
+        Raises:
+            ValueError: Если обнаружены циклические зависимости.
+        """
+        # in_degree[node] = количество зависимостей данного модуля
+        in_degree: dict[str, int] = {n: len(deps) for n, deps in graph.items()}
+
+        # Начинаем с модулей без зависимостей
+        queue = [n for n, d in in_degree.items() if d == 0]
+        result: list[str] = []
+
+        while queue:
+            node = queue.pop(0)
+            result.append(node)
+            # Уменьшаем degree для всех, кто зависит от node
+            for n in graph:
+                if node in graph[n]:
+                    in_degree[n] -= 1
+                    if in_degree[n] == 0:
+                        queue.append(n)
+
+        if len(result) != len(graph):
+            missing = set(graph.keys()) - set(result)
+            raise ValueError(f"Циклические зависимости: {missing}")
+
+        return result
 
     def load(self, name: str, state: Any = None) -> ModuleBase:
         """Импортировать модуль, создать экземпляр, вызвать on_load().

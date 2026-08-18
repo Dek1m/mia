@@ -1,68 +1,135 @@
-"""Тесты DatabaseProvider v2 — CRUD операции и @db_method."""
+"""Тесты DatabaseProvider v2 — sync CRUD на psycopg v3."""
 from __future__ import annotations
 
-import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
-from core.task import TaskStatus, TaskType
 from modules.db.provider import DatabaseProvider, validate_identifier
 
 
-# ── Мок-пул ────────────────────────────────────────────
+# ── Мок-пул (psycopg v3 style) ─────────────────────
+
+
+class MockCursor:
+    """Мок cursor psycopg v3."""
+
+    def __init__(self, store: dict[str, dict]) -> None:
+        self._store = store
+        self._seq = 0
+        self.description: list[tuple] = []
+        self.rowcount: int = 0
+        self.statusmessage: str = "OK"
+        self._last_query: str = ""
+        self._last_args: tuple = ()
+
+    def execute(self, query: str, params: tuple = ()) -> None:
+        self._last_query = query
+        self._last_args = params
+        self.rowcount = 0
+
+        if "INSERT" in query and "RETURNING id" in query:
+            self._seq += 1
+            id_ = str(self._seq)
+            # Парсим колонки из INSERT INTO table (col1, col2)
+            cols_part = query.split("(")[1].split(")")[0]
+            columns = [c.strip() for c in cols_part.split(",")]
+            data = dict(zip(columns, params))
+            data["id"] = id_
+            self._store[f"id:{id_}"] = data
+            self.statusmessage = f"INSERT 0 1"
+            self.description = [("id",)]
+            self._result = (id_,)
+        elif "SELECT EXISTS" in query:
+            target_id = params[0] if params else None
+            found = any(r.get("id") == target_id for r in self._store.values())
+            self.description = [("exists",)]
+            self._result = (found,)
+        elif "SELECT COUNT" in query:
+            self.description = [("count",)]
+            self._result = (len(self._store),)
+        elif "SELECT" in query and "FROM" in query:
+            target_id = params[0] if params else None
+            for record in self._store.values():
+                if record.get("id") == target_id:
+                    self.description = [(k,) for k in record.keys()]
+                    self._result = tuple(record.values())
+                    return
+            self._result = None
+        elif "UPDATE" in query and "RETURNING" in query:
+            target_id = params[-1] if params else None
+            for record in self._store.values():
+                if record.get("id") == target_id:
+                    for i, val in enumerate(params[:-1]):
+                        # Простая подстановка по порядку
+                        keys = [k for k in record.keys() if k != "id"]
+                        if i < len(keys):
+                            record[keys[i]] = val
+                    self.description = [(k,) for k in record.keys()]
+                    self._result = tuple(record.values())
+                    self.statusmessage = "UPDATE 1"
+                    return
+            self._result = None
+        elif "DELETE" in query:
+            target_id = params[0] if params else None
+            for key, record in list(self._store.items()):
+                if record.get("id") == target_id:
+                    del self._store[key]
+                    self.rowcount = 1
+                    self.statusmessage = "DELETE 1"
+                    return
+            self.statusmessage = "DELETE 0"
+        else:
+            self._result = None
+
+    def fetchone(self) -> tuple | None:
+        return getattr(self, "_result", None)
+
+    def fetchall(self) -> list[tuple]:
+        return [getattr(self, "_result", None)] if hasattr(self, "_result") and self._result else []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+
+class MockConnection:
+    """Мок connection psycopg v3."""
+
+    def __init__(self, store: dict[str, dict]) -> None:
+        self._store = store
+
+    def cursor(self) -> MockCursor:
+        return MockCursor(self._store)
+
+    def execute(self, query: str, params: tuple = ()) -> None:
+        cursor = MockCursor(self._store)
+        cursor.execute(query, params)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
 
 
 class MockPool:
-    """Минимальный мок asyncpg pool."""
+    """Мок psycopg_pool.ConnectionPool."""
 
     def __init__(self) -> None:
         self._store: dict[str, dict] = {}
-        self._seq = 0
 
-    async def fetchrow(self, query: str, *args: Any) -> dict | None:
-        if "UPDATE" in query and "RETURNING" in query:
-            for record in self._store.values():
-                if args and record.get("id") == args[-1]:
-                    for i, key in enumerate(["name"]):
-                        if i < len(args) - 1:
-                            record[key] = args[i]
-                    return dict(record)
-            return None
-        if "SELECT" in query and "FROM" in query:
-            for key, record in self._store.items():
-                if len(args) > 0 and record.get("id") == args[0]:
-                    return record
-            return None
-        return None
+    def connection(self) -> MockConnection:
+        return MockConnection(self._store)
 
-    async def fetchval(self, query: str, *args: Any) -> Any:
-        if "INSERT" in query:
-            self._seq += 1
-            id_ = str(self._seq)
-            self._store[f"id:{id_}"] = {"id": id_, **dict(zip(["name"], args))}
-            return id_
-        if "SELECT EXISTS" in query:
-            for record in self._store.values():
-                if len(args) > 0 and record.get("id") == args[0]:
-                    return True
-            return False
-        if "SELECT COUNT" in query:
-            return len(self._store)
-        return None
+    def __enter__(self):
+        return self
 
-    async def fetch(self, query: str, *args: Any) -> list[dict]:
-        return list(self._store.values())
-
-    async def execute(self, query: str, *args: Any) -> str:
-        if "DELETE" in query:
-            for record in list(self._store.values()):
-                if len(args) > 0 and record.get("id") == args[0]:
-                    del self._store[f"id:{record['id']}"]
-                    return "DELETE 1"
-            return "DELETE 0"
-        return "OK"
+    def __exit__(self, *args):
+        pass
 
 
 # ── Фикстуры ───────────────────────────────────────────
@@ -96,44 +163,38 @@ def provider(pool: MockPool, config: Any) -> DatabaseProvider:
 class TestCRUDOperations:
     """DatabaseProvider CRUD-методы работают корректно."""
 
-    @pytest.mark.asyncio
-    async def test_get(self, provider: DatabaseProvider, pool: MockPool) -> None:
+    def test_get(self, provider: DatabaseProvider, pool: MockPool) -> None:
         pool._store["id:1"] = {"id": "1", "name": "Alice"}
-        result = await provider.get("users", "1")
+        result = provider.get("users", "1")
         assert result == {"id": "1", "name": "Alice"}
 
-    @pytest.mark.asyncio
-    async def test_insert(self, provider: DatabaseProvider) -> None:
-        result = await provider.insert("users", {"name": "Alice"})
+    def test_insert(self, provider: DatabaseProvider) -> None:
+        result = provider.insert("users", {"name": "Alice"})
         assert result == "1"
 
-    @pytest.mark.asyncio
-    async def test_update(self, provider: DatabaseProvider, pool: MockPool) -> None:
+    def test_update(self, provider: DatabaseProvider, pool: MockPool) -> None:
         pool._store["id:1"] = {"id": "1", "name": "Alice"}
-        result = await provider.update("users", "1", {"name": "Bob"})
+        result = provider.update("users", "1", {"name": "Bob"})
         assert result == {"id": "1", "name": "Bob"}
 
-    @pytest.mark.asyncio
-    async def test_delete(self, provider: DatabaseProvider, pool: MockPool) -> None:
+    def test_delete(self, provider: DatabaseProvider, pool: MockPool) -> None:
         pool._store["id:1"] = {"id": "1", "name": "Alice"}
-        result = await provider.delete("users", "1")
+        result = provider.delete("users", "1")
         assert result is True
 
-    @pytest.mark.asyncio
-    async def test_exists(self, provider: DatabaseProvider, pool: MockPool) -> None:
+    def test_exists(self, provider: DatabaseProvider, pool: MockPool) -> None:
         pool._store["id:1"] = {"id": "1", "name": "Alice"}
-        result = await provider.exists("users", "1")
+        result = provider.exists("users", "1")
         assert result is True
 
-    @pytest.mark.asyncio
-    async def test_count(self, provider: DatabaseProvider, pool: MockPool) -> None:
+    def test_count(self, provider: DatabaseProvider, pool: MockPool) -> None:
         pool._store["id:1"] = {"id": "1", "name": "Alice"}
         pool._store["id:2"] = {"id": "2", "name": "Bob"}
-        result = await provider.count("users")
+        result = provider.count("users")
         assert result == 2
 
 
-# ── 3. Setter-методы ───────────────────────────────────
+# ── 2. Setter-методы ──────────────────────────────────
 
 
 class TestSetterMethods:

@@ -1,103 +1,168 @@
-"""E2E-тесты модуля db — CRUD, кеш, lock, retry, batch-операции."""
+"""E2E-тесты модуля db — sync CRUD на psycopg v3."""
 from __future__ import annotations
 
-import asyncio
 import threading
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from core.stats_batch_writer import StatsBatchWriter
-from pools.smart_dispatcher import SmartDispatcher
 from modules.db.provider import DatabaseProvider
 from modules.db.config import DatabaseConfig
 
 
-# ── Мок-пул ────────────────────────────────────────────
+# ── Мок-пул (psycopg v3 style) ─────────────────────
 
 
-class E2EMockPool:
-    """Полнофункциональный мок asyncpg pool."""
+class E2ECursor:
+    """Полнофункциональный мок cursor psycopg v3."""
 
-    def __init__(self) -> None:
-        self._store: dict[str, dict] = {}
-        self._seq = 0
-        self._lock = threading.Lock()
+    def __init__(self, store: dict[str, dict], lock: threading.Lock, seq_counter: list[int] | None = None) -> None:
+        self._store = store
+        self._lock = lock
+        self._seq_ref = seq_counter if seq_counter is not None else [0]
+        self.description: list[tuple] = []
+        self.rowcount: int = 0
+        self.statusmessage: str = "OK"
+        self._result: Any = None
 
-    async def fetchrow(self, query: str, *args: Any) -> dict | None:
+    def execute(self, query: str, params: tuple = ()) -> None:
         with self._lock:
-            if "UPDATE" in query and "RETURNING" in query:
-                for record in self._store.values():
-                    if args and record.get("id") == args[-1]:
-                        for i, key in enumerate(["name"]):
-                            if i < len(args) - 1:
-                                record[key] = args[i]
-                        return dict(record)
-                return None
-            if "SELECT" in query and "FROM" in query and "EXISTS" not in query:
-                for record in self._store.values():
-                    if args and record.get("id") == args[0]:
-                        return dict(record)
-                return None
-        return None
+            self.rowcount = 0
+            self._result = None
 
-    async def fetchval(self, query: str, *args: Any) -> Any:
-        with self._lock:
             if "INSERT" in query and "RETURNING id" in query:
-                self._seq += 1
-                id_ = str(self._seq)
-                data = {"id": id_}
-                if args:
-                    data["name"] = args[0] if args else None
+                self._seq_ref[0] += 1
+                id_ = str(self._seq_ref[0])
+                cols_part = query.split("(")[1].split(")")[0]
+                columns = [c.strip() for c in cols_part.split(",")]
+                data = dict(zip(columns, params))
+                data["id"] = id_
                 self._store[f"id:{id_}"] = data
-                return id_
-            if "SELECT EXISTS" in query:
+                self.statusmessage = "INSERT 0 1"
+                self.description = [("id",)]
+                self._result = (id_,)
+            elif "SELECT EXISTS" in query:
+                target_id = params[0] if params else None
+                found = any(r.get("id") == target_id for r in self._store.values())
+                self.description = [("exists",)]
+                self._result = (found,)
+            elif "SELECT COUNT" in query:
+                self.description = [("count",)]
+                self._result = (len(self._store),)
+            elif "SELECT" in query and "FROM" in query:
+                target_id = params[0] if params else None
                 for record in self._store.values():
-                    if args and record.get("id") == args[0]:
-                        return True
-                return False
-            if "SELECT COUNT" in query:
-                return len(self._store)
-        return None
-
-    async def fetch(self, query: str, *args: Any) -> list[dict]:
-        with self._lock:
-            return [dict(r) for r in self._store.values()]
-
-    async def execute(self, query: str, *args: Any) -> str:
-        with self._lock:
-            if "DELETE" in query and "ANY" in query:
-                ids_to_delete = args[0] if args else []
+                    if record.get("id") == target_id:
+                        self.description = [(k,) for k in record.keys()]
+                        self._result = tuple(record.values())
+                        return
+                self._result = None
+            elif "UPDATE" in query and "RETURNING" in query:
+                target_id = params[-1] if params else None
+                for record in self._store.values():
+                    if record.get("id") == target_id:
+                        for i, val in enumerate(params[:-1]):
+                            keys = [k for k in record.keys() if k != "id"]
+                            if i < len(keys):
+                                record[keys[i]] = val
+                        self.description = [(k,) for k in record.keys()]
+                        self._result = tuple(record.values())
+                        self.statusmessage = "UPDATE 1"
+                        return
+                self._result = None
+            elif "DELETE" in query and "ANY" in query:
+                ids_to_delete = params[0] if params else []
                 deleted = 0
                 for record in list(self._store.values()):
                     if record.get("id") in ids_to_delete:
                         del self._store[f"id:{record['id']}"]
                         deleted += 1
-                return f"DELETE {deleted}"
-            if "DELETE" in query:
-                for record in list(self._store.values()):
-                    if args and record.get("id") == args[0]:
-                        del self._store[f"id:{record['id']}"]
-                        return "DELETE 1"
-                return "DELETE 0"
-            if "UPDATE" in query:
+                self.rowcount = deleted
+                self.statusmessage = f"DELETE {deleted}"
+            elif "DELETE" in query:
+                target_id = params[0] if params else None
+                for key, record in list(self._store.items()):
+                    if record.get("id") == target_id:
+                        del self._store[key]
+                        self.rowcount = 1
+                        self.statusmessage = "DELETE 1"
+                        return
+                self.statusmessage = "DELETE 0"
+            elif "UPDATE" in query:
+                target_id = params[-1] if params else None
                 for record in self._store.values():
-                    if args and record.get("id") == args[-1]:
-                        for i, key in enumerate(["name"]):
-                            if i < len(args) - 1:
-                                record[key] = args[i]
-                        return "UPDATE 1"
-                return "UPDATE 0"
-            if "INSERT" in query and "RETURNING" not in query:
-                self._seq += 1
-                id_ = str(self._seq)
+                    if record.get("id") == target_id:
+                        for i, val in enumerate(params[:-1]):
+                            keys = [k for k in record.keys() if k != "id"]
+                            if i < len(keys):
+                                record[keys[i]] = val
+                        self.statusmessage = "UPDATE 1"
+                        return
+                self.statusmessage = "UPDATE 0"
+            elif "INSERT" in query:
+                self._seq_ref[0] += 1
+                id_ = str(self._seq_ref[0])
                 data = {"id": id_}
-                if args:
-                    data["name"] = args[0]
+                if params:
+                    data["name"] = params[0]
                 self._store[f"id:{id_}"] = data
-                return "INSERT 0 1"
-        return "OK"
+                self.statusmessage = "INSERT 0 1"
+            else:
+                self.statusmessage = "OK"
+
+    def fetchone(self) -> tuple | None:
+        return self._result
+
+    def fetchall(self) -> list[tuple]:
+        return [self._result] if self._result else []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+
+class E2EConnection:
+    """Мок connection psycopg v3."""
+
+    def __init__(self, store: dict[str, dict], lock: threading.Lock, seq_counter: list[int]) -> None:
+        self._store = store
+        self._lock = lock
+        self._seq_counter = seq_counter
+
+    def cursor(self) -> E2ECursor:
+        return E2ECursor(self._store, self._lock, self._seq_counter)
+
+    def execute(self, query: str, params: tuple = ()) -> None:
+        cursor = E2ECursor(self._store, self._lock)
+        cursor.execute(query, params)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+
+class E2EMockPool:
+    """Полнофункциональный мок psycopg_pool.ConnectionPool."""
+
+    def __init__(self) -> None:
+        self._store: dict[str, dict] = {}
+        self._lock = threading.Lock()
+        self._seq_counter: list[int] = [0]  # общий счётчик для всех cursors
+
+    def connection(self) -> E2EConnection:
+        return E2EConnection(self._store, self._lock, self._seq_counter)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
 
 
 # ── Мок-кеш ────────────────────────────────────────────
@@ -174,36 +239,34 @@ def provider_with_cache(pool: E2EMockPool, config: DatabaseConfig, cache: E2ECac
 class TestFullCRUDCycle:
     """E2E: полный CRUD-цикл через DatabaseProvider."""
 
-    @pytest.mark.asyncio
-    async def test_insert_get_update_delete(
+    def test_insert_get_update_delete(
         self, provider: DatabaseProvider,
     ) -> None:
         """Полный CRUD: insert → get → update → delete."""
-        id1 = await provider.insert("users", {"name": "Alice"})
+        id1 = provider.insert("users", {"name": "Alice"})
         assert id1 == "1"
 
-        user = await provider.get("users", id1)
+        user = provider.get("users", id1)
         assert user == {"id": "1", "name": "Alice"}
 
-        updated = await provider.update("users", id1, {"name": "Bob"})
+        updated = provider.update("users", id1, {"name": "Bob"})
         assert updated is not None
 
-        deleted = await provider.delete("users", id1)
+        deleted = provider.delete("users", id1)
         assert deleted is True
 
-    @pytest.mark.asyncio
-    async def test_error_propagation(
+    def test_error_propagation(
         self, provider: DatabaseProvider,
     ) -> None:
         """Ошибка в пуле пробрасывается."""
         class BrokenPool:
-            async def fetchrow(self, query, *args):
+            def connection(self):
                 raise RuntimeError("DB connection lost")
 
         provider._pool = BrokenPool()
 
         with pytest.raises(RuntimeError, match="DB connection lost"):
-            await provider.get("users", "1")
+            provider.get("users", "1")
 
 
 # ============================================================
@@ -214,34 +277,31 @@ class TestFullCRUDCycle:
 class TestBatchOperations:
     """E2E: bulk-операции работают через DatabaseProvider."""
 
-    @pytest.mark.asyncio
-    async def test_bulk_insert(
+    def test_bulk_insert(
         self, provider: DatabaseProvider,
     ) -> None:
         """bulk_insert вставляет несколько записей."""
-        ids = await provider.bulk_insert("users", [
+        ids = provider.bulk_insert("users", [
             {"name": "Alice"},
             {"name": "Bob"},
         ])
         assert len(ids) == 2
 
-    @pytest.mark.asyncio
-    async def test_bulk_delete(
+    def test_bulk_delete(
         self, provider: DatabaseProvider,
     ) -> None:
         """bulk_delete удаляет несколько записей."""
-        id1 = await provider.insert("users", {"name": "Alice"})
-        id2 = await provider.insert("users", {"name": "Bob"})
+        id1 = provider.insert("users", {"name": "Alice"})
+        id2 = provider.insert("users", {"name": "Bob"})
 
-        deleted = await provider.bulk_delete("users", [id1, id2])
+        deleted = provider.bulk_delete("users", [id1, id2])
         assert deleted == 2
 
-    @pytest.mark.asyncio
-    async def test_bulk_insert_empty(
+    def test_bulk_insert_empty(
         self, provider: DatabaseProvider,
     ) -> None:
         """bulk_insert с пустым списком."""
-        ids = await provider.bulk_insert("users", [])
+        ids = provider.bulk_insert("users", [])
         assert ids == []
 
 

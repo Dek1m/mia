@@ -13,19 +13,21 @@ log = get_logger(__name__)
 
 @dataclass
 class ModuleMeta:
-    """Конфигурация модуля: permissions, cache, lock, timeout.
+    """Конфигурация модуля: permissions, cache, lock, timeout, dependencies.
 
     Описывает поведение методов модуля на уровне метаданных:
     - permissions: какие разрешения нужны для вызова метода
     - cache_rules: TTL кеширования результатов метода
     - lock_rules: шаблоны блокировок (например, по пользователю)
     - timeout_defaults: таймауты по умолчанию для методов
+    - dependencies: список модулей, от которых зависит данный модуль
     """
 
     permissions: dict[str, str] = field(default_factory=dict)
     cache_rules: dict[str, int] = field(default_factory=dict)
     lock_rules: dict[str, str] = field(default_factory=dict)
     timeout_defaults: dict[str, float] = field(default_factory=dict)
+    dependencies: list[str] = field(default_factory=list)
 
 
 def api_method(fn: Callable | None = None, *, parallel: bool = False) -> Callable:

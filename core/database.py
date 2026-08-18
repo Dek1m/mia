@@ -79,7 +79,7 @@ class Database(IDatabase):
 
         start = time.monotonic()
         try:
-            # Dispatch через SharedMemory
+            # Всё через SharedMemory → WorkerManager → воркер → ThreadPool
             if self._shared_memory is not None:
                 from core.shared_memory import TaskData
                 task_data = TaskData(
@@ -131,19 +131,7 @@ class Database(IDatabase):
 
         start = time.monotonic()
         try:
-            if self._shared_memory is not None:
-                from core.shared_memory import TaskData
-                task_data = TaskData(
-                    uuid=str(uuid4()),
-                    function_name="get_by_field",
-                    module_name="db",
-                    args_serialized=pickle.dumps((table, field, value)),
-                    kwargs_serialized=pickle.dumps({}),
-                    created_at=time.time(),
-                )
-                self._shared_memory.submit_task(task_data)
-                result = self._shared_memory.get_result(task_data.uuid)
-            elif self._dispatcher is not None:
+            if self._dispatcher is not None:
                 result = self._dispatcher.dispatch(self._provider_get_by_field, table, field, value)
             else:
                 result = self._delegate("get_by_field", table, field, value)
@@ -164,6 +152,7 @@ class Database(IDatabase):
     def insert(self, table: str, data: dict) -> str:
         start = time.monotonic()
         try:
+            # Всё через SharedMemory → WorkerManager → воркер → ThreadPool
             if self._shared_memory is not None:
                 from core.shared_memory import TaskData
                 task_data = TaskData(

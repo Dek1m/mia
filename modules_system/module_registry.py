@@ -44,6 +44,14 @@ class ModuleRegistry(IModuleRegistry):
     def discover(self) -> list[str]:
         return self._manager.discover()
 
+    def discover_and_sort(self) -> list[str]:
+        """Найти модули и отсортировать по зависимостям.
+
+        Returns:
+            Список имён модулей в топологическом порядке.
+        """
+        return self._manager.discover_and_sort()
+
     def load(self, name: str, state: Any = None) -> Any:
         with self._lock:
             if name in self._modules:
