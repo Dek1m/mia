@@ -135,23 +135,6 @@ class CoreSection:
 
 
 @dataclass(frozen=True)
-class PoolsSection:
-    """Секция [pools.worker]."""
-
-    worker_count: str = "auto"
-    cpu_affinity: bool = True
-    thread_pool_max_workers: int = 4
-
-
-@dataclass(frozen=True)
-class SharedMemorySection:
-    """Секция [shared_memory]."""
-
-    backend: str = "local"
-    result_ttl: int = 300
-
-
-@dataclass(frozen=True)
 class BelleConfig:
     """Единый конфигурационный источник Belle.
 
@@ -168,8 +151,6 @@ class BelleConfig:
     workspace: WorkspaceSection = field(default_factory=WorkspaceSection)
     log: LogSection = field(default_factory=LogSection)
     core: CoreSection = field(default_factory=CoreSection)
-    pools: PoolsSection = field(default_factory=PoolsSection)
-    shared_memory: SharedMemorySection = field(default_factory=SharedMemorySection)
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> BelleConfig:
@@ -207,11 +188,6 @@ class BelleConfig:
                 data.get("core", {}),
                 renames={"timeout": "task_timeout", "retry": "task_retry"},
             )),
-            pools=PoolsSection(**cls._flatten_section(
-                data.get("pools", {}),
-                renames={"count": "worker_count"},
-            )),
-            shared_memory=SharedMemorySection(**data.get("shared_memory", {})),
         )
 
     @staticmethod
@@ -320,7 +296,6 @@ class BelleConfig:
             "port", "pool_min", "pool_max",
             "default_page_size", "max_page_size",
             "task_retry", "p95_threshold", "history_window",
-            "worker_count", "result_ttl",
         }
         float_keys = {
             "timeout", "login_timeout", "create_user_timeout",

@@ -1,97 +1,16 @@
-# План: Создание Log модуля
+# План: belle кладёт в Redis, shaltir исполняет
 
-## Задача: Создание Log модуля
+## Решение
 
-**Тип:** фича
-**Сложность:** низкая
-**Стандарт:** не определён (LOGGING_STANDARD.md отсутствует в проекте)
+belle — один процесс, тонкая обёртка: `Application()`. Свой воркер не поднимает.
 
-### Контекст
+`@task` уходит в Redis (очередь `mia`, задача `mia.run`). Исполняет shaltir worker:
 
-- **Из памяти (ADR):** Log = отдельный модуль (как auth, db, llm), Facade над argenta-logging. Регистрируется в State как ILogger. Все модули обращаются через `state.log`.
-- **Из кода:** `argenta-logging>=0.1.0` уже в зависимостях (`pyproject.toml`). Модули следуют паттерну: `ModuleBase` → `on_load(state)` → `state.services.register(...)`.
-- **Из требований Мастера:** Log — простой facade. Никаких воркеров, просто stdout. Философия: весь функционал = модули/плагины.
-- **Ключевой момент:** Log НЕ dispatch'ится через SharedMemory → WorkerManager. Это infrastructure concern, должен работать быстро и синхронно.
+```
+SHALTIR_INCLUDE=core.dispatch.tasks SHALTIR_CELERY_QUEUE=mia python -m shaltir worker
+```
 
-### Шаг 1: Добавить интерфейс ILogger в core/interfaces.py
-
-- **Файл:** `core/interfaces.py`
-- **Что сделать:** Добавить абстрактный класс `ILogger` с методами `info()`, `warning()`, `error()`, `debug()`, `critical()`, `get_child(name)`.
-- **Зачем:** Остальные модули зависят от интерфейса, а не от реализации (Dependency Rule).
-- **Сложность:** низкая
-- **Зависимости:** —
-- **Ожидаемый результат:** Интерфейс `ILogger` доступен для импорта из `core.interfaces`.
-
-### Шаг 2: Создать конфигурацию LogConfig
-
-- **Файл:** `modules/log/config.py` (новый)
-- **Что сделать:** Dataclass `LogConfig` с полями `level: str` и `format: str`. Метод `from_env()` читает `MIA_LOG_LEVEL` (дефолт `INFO`) и `MIA_LOG_FORMAT` (дефолт `posix`).
-- **Зачем:** Конфигурация логирования через ENV, как у других модулей.
-- **Сложность:** низкая
-- **Зависимости:** —
-- **Ожидаемый результат:** `LogConfig.from_env()` возвращает конфиг из ENV.
-
-### Шаг 3: Создать Log класс (Facade)
-
-- **Файл:** `modules/log/logger.py` (новый)
-- **Что сделать:** Класс `Log`, реализующий `ILogger`. В конструкторе вызывает `argenta_logging.setup_logging()`. Методы `info/warning/error/debug/critical` делегируют вызов в `argenta_logging.get_logger()`. Метод `get_child(name)` создаёт дочерний логгер.
-- **Зачем:** Facade над argenta-logging. Все модули используют единый интерфейс.
-- **Сложность:** низкая
-- **Зависимости:** шаг 1 (интерфейс), шаг 2 (конфиг)
-- **Ожидаемый результат:** `Log` класс, который можно использовать как `log.info("message")`.
-
-### Шаг 4: Создать модуль LogModule
-
-- **Файл:** `modules/log/__init__.py` (новый)
-- **Что сделать:** Класс `LogModule(ModuleBase)`. В `on_load(state)` — создаёт `Log`, регистрирует в `state.services` как `ILogger`. В `on_unload()` — ничего (логер не требует очистки).
-- **Зачем:** Следование паттерну модулей Mia.
-- **Сложность:** низкая
-- **Зависимости:** шаг 3
-- **Ожидаемый результат:** Модуль загружается через `app.load_module("log")`.
-
-### Шаг 5: Зарегистрировать Log в Application
-
-- **Файл:** `core/application.py`
-- **Что сделать:** В `__init__` — после создания `ServiceRegistry` вызвать `app.load_module("log")`. Добавить свойство `log` → `return self._services.resolve(ILogger)`.
-- **Зачем:** Log должен быть доступен через `state.log` (как `state.cache`, `state.database`).
-- **Сложность:** низкая
-- **Зависимости:** шаг 4
-- **Ожидаемый результат:** `app.log.info("message")` работает.
-
-### Шаг 6: Заменить прямые вызовы get_logger на state.log
-
-- **Файлы:** `core/application.py`, `modules_system/module_base.py`, `storage/logging_config.py` (и другие файлы с `get_logger(__name__)`)
-- **Что сделать:** Заменить `log = get_logger(__name__)` на использование `state.log` (где доступен) или оставить как есть для инфраструктурных модулей, которые работают до загрузки Log.
-- **Зачем:** Единообразие. Все модули через `state.log`.
-- **Сложность:** средняя (нужно проверить порядок загрузки)
-- **Зависимости:** шаг 5
-- **Ожидаемый результат:** Модули используют `state.log` вместо `get_logger()`.
-
-### Шаг 7: Написать тесты
-
-- **Файл:** `tests/test_log_module.py` (новый)
-- **Что сделать:** Юнит-тесты: 1) `LogConfig.from_env()` читает ENV, 2) `Log` методы делегируют в argenta-logging, 3) `LogModule.on_load()` регистрирует в DI, 4) `get_child()` создаёт дочерний логгер.
-- **Зачем:** Убедиться, что facade работает корректно.
-- **Сложность:** низкая
-- **Зависимости:** шаг 4
-- **Ожидаемый результат:** Все тесты зелёные.
-
-### Шаг 8: Документация
-
-- **Файл:** `modules/log/README.md` (новый)
-- **Что сделать:** Описание модуля, ENV-переменные, примеры использования.
-- **Зачем:** Документация по стандарту проекта.
-- **Сложность:** низкая
-- **Зависимости:** —
-- **Ожидаемый результат:** README.md с описанием модуля.
-
-### Риски
-
-1. **Порядок загрузки:** Log должен загружаться ДО других модулей (чтобы они могли использовать `state.log`). → Решение: Загружать Log первым в `Application.__init__`.
-
-### Итого
-
-- Шагов: 8
-- Файлов: 6 (5 новых + 1 изменение)
-- Сложность: низкая
-- Время: ~30-45 минут
+- Клиент shaltir живёт в mia (`ShaltirDispatcher`). belle shaltir не импортирует.
+- `Application()` без `dispatcher=` шлёт в shaltir.
+- `Application(dispatcher=LocalInvokeDispatcher())` / `MIA_DISPATCH=local` — in-process.
+- Отдельного `mia-worker` нет.

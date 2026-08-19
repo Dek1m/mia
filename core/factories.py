@@ -2,18 +2,16 @@
 from __future__ import annotations
 
 from typing import Any
+
 from argenta_logging import get_logger
-from core.interfaces import (
-    ICache, IEventBus, IHeartbeatMonitor,
-    ICpuMetricsCollector, ILoadBalancer, IWorkerManager, IDatabase,
-)
+from core.interfaces import ICache, IDatabase, IEventBus
 
 log = get_logger(__name__)
 
 
 def _cfg() -> Any:
-    """Ленивый импорт MiaConfig для избежания циклических импортов."""
     from core.config import MiaConfig
+
     return MiaConfig.get()
 
 
@@ -21,7 +19,7 @@ class CacheFactory:
     """Фабрика кеш-бэкендов.
 
     backends:
-        null     — NullCache (заглушка)
+        null      — NullCache
         hierarchy — CacheHierarchy (L0 dict → L1 SharedMemory → L2 Redis)
     """
 
@@ -31,9 +29,11 @@ class CacheFactory:
             backend = _cfg().get_value("storage.cache.backend", "null")
         if backend == "null":
             from storage.cache_interface import NullCache
+
             return NullCache()
         if backend == "hierarchy":
             from storage.cache_hierarchy import CacheHierarchy
+
             return CacheHierarchy(
                 l1_shm=kwargs.get("l1_shm"),
                 l1_segment=kwargs.get("l1_segment", "cache_l1"),
@@ -50,63 +50,8 @@ class EventBusFactory:
     @staticmethod
     def create() -> IEventBus:
         from communication.event_bus import EventBus
+
         return EventBus()
-
-
-class HeartbeatFactory:
-    """Фабрика мониторов heartbeat."""
-
-    @staticmethod
-    def create(timeout: float | None = None, check_interval: float | None = None) -> IHeartbeatMonitor:
-        from monitoring.heartbeat_monitor import HeartbeatMonitor
-        cfg = _cfg()
-        if timeout is None:
-            timeout = cfg.get_value("monitoring.heartbeat.timeout", 30.0)
-        if check_interval is None:
-            check_interval = cfg.get_value("monitoring.heartbeat.check_interval", 5.0)
-        return HeartbeatMonitor(timeout=timeout, check_interval=check_interval)
-
-
-class CpuMetricsCollectorFactory:
-    """Фабрика сборщиков метрик CPU."""
-
-    @staticmethod
-    def create(collect_interval: float | None = None) -> ICpuMetricsCollector:
-        from pools.cpu_metrics import CpuMetricsCollector
-        if collect_interval is None:
-            collect_interval = _cfg().get_value("pools.cpu_metrics.collect_interval", 1.0)
-        return CpuMetricsCollector(collect_interval=collect_interval)
-
-
-class LoadBalancerFactory:
-    """Фабрика балансировщиков нагрузки."""
-
-    @staticmethod
-    def create() -> ILoadBalancer:
-        from pools.load_balancer import LoadBalancer
-        return LoadBalancer()
-
-
-class WorkerManagerFactory:
-    """Фабрика менеджеров воркеров."""
-
-    @staticmethod
-    def create(
-        load_balancer: Any | None = None,
-        heartbeat_monitor: Any | None = None,
-        shared_memory: Any | None = None,
-    ) -> IWorkerManager:
-        from pools.worker_manager import WorkerManager
-        from pools.load_balancer import LoadBalancer
-        from core.shared_memory import SharedMemory
-        if shared_memory is None:
-            shared_memory = SharedMemory()
-            shared_memory.start()
-        return WorkerManager(
-            load_balancer=load_balancer or LoadBalancer(),
-            heartbeat_monitor=heartbeat_monitor,
-            shared_memory=shared_memory,
-        )
 
 
 class DatabaseFactory:
@@ -115,6 +60,7 @@ class DatabaseFactory:
     @staticmethod
     def create(cache: Any | None = None, dispatcher: Any | None = None) -> IDatabase:
         from core.database import Database
+
         return Database(cache=cache, dispatcher=dispatcher)
 
     @staticmethod
@@ -122,11 +68,7 @@ class DatabaseFactory:
         cache: Any | None = None,
         dispatcher: Any | None = None,
     ) -> tuple[IDatabase, Any, Any]:
-        """Создать Database с подключённым Universal Task System.
-
-        Args:
-            cache: Кеш-бэкенд.
-            dispatcher: SmartDispatcher.
+        """Создать Database + StatsBatchWriter.
 
         Returns:
             (database, task_store, stats_writer)
@@ -134,13 +76,7 @@ class DatabaseFactory:
         from core.database import Database
         from core.stats_batch_writer import StatsBatchWriter
 
-        database = Database(
-            cache=cache,
-            dispatcher=dispatcher,
-            stats_writer=None,  # циклическая зависимость — устанавливается ниже
-        )
+        database = Database(cache=cache, dispatcher=dispatcher, stats_writer=None)
         stats_writer = StatsBatchWriter(db=database)
-        # StatsBatchWriter теперь ссылается на database,
-        # а database ссылается на stats_writer — замыкание корректно
         database._stats_writer = stats_writer
         return database, None, stats_writer

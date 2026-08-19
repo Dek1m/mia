@@ -43,9 +43,12 @@ def _reset_singleton():
 @pytest.fixture(autouse=True)
 def _clean_env():
     """Очистка ENV от MIA_* переменных перед каждым тестом."""
-    saved = {k: v for k, v in os.environ.items() if k.startswith("MIA_")}
+    keep = {"MIA_DISPATCH", "MIA_TASK_CRYPTO_KEY", "MIA_TASK_CRYPTO_KEY_OLD"}
+    saved = {k: v for k, v in os.environ.items() if k.startswith("MIA_") and k not in keep}
     for k in saved:
         os.environ.pop(k, None)
+    os.environ.setdefault("MIA_DISPATCH", "local")
+    os.environ.setdefault("MIA_TASK_CRYPTO_KEY", "00" * 32)
     yield
     for k, v in saved.items():
         os.environ[k] = v
@@ -70,23 +73,14 @@ class TestDefaults:
             "core.task.retry",
             "core.task.retry_delay",
             "core.shutdown.timeout",
-            "pools.worker.stop_timeout",
             "core.database.list_limit",
             "modules.max_init_size",
-            "pools.load_balancer.weight_cpu",
-            "pools.load_balancer.weight_tasks",
-            "pools.load_balancer.weight_stale",
-            "pools.load_balancer.max_active_tasks",
-            "pools.cpu_metrics.collect_interval",
-            "pools.worker.heartbeat_period",
             "resilience.retry.max_attempts",
             "resilience.retry.base_delay",
             "resilience.retry.max_delay",
             "resilience.circuit_breaker.failure_threshold",
             "resilience.circuit_breaker.recovery_timeout",
             "resilience.circuit_breaker.success_threshold",
-            "monitoring.heartbeat.timeout",
-            "monitoring.heartbeat.check_interval",
             "modules.dir",
             "storage.cache.backend",
             "modules.verification.mode",
@@ -108,23 +102,14 @@ class TestDefaults:
             "core.task.retry": 0,
             "core.task.retry_delay": 0.5,
             "core.shutdown.timeout": 30.0,
-            "pools.worker.stop_timeout": 5.0,
             "core.database.list_limit": 100,
             "modules.max_init_size": 1000000,
-            "pools.load_balancer.weight_cpu": 0.7,
-            "pools.load_balancer.weight_tasks": 0.2,
-            "pools.load_balancer.weight_stale": 0.1,
-            "pools.load_balancer.max_active_tasks": 10,
-            "pools.cpu_metrics.collect_interval": 1.0,
-            "pools.worker.heartbeat_period": 5.0,
             "resilience.retry.max_attempts": 3,
             "resilience.retry.base_delay": 0.5,
             "resilience.retry.max_delay": 30.0,
             "resilience.circuit_breaker.failure_threshold": 5,
             "resilience.circuit_breaker.recovery_timeout": 30.0,
             "resilience.circuit_breaker.success_threshold": 3,
-            "monitoring.heartbeat.timeout": 30.0,
-            "monitoring.heartbeat.check_interval": 5.0,
             "modules.dir": "modules",
             "storage.cache.backend": "null",
             "modules.verification.mode": "disabled",
@@ -236,7 +221,7 @@ class TestFileLoading:
 
         assert cfg.get_value("core.routing.p95_threshold") == 0.5
         assert cfg.get_value("core.routing.history_window") == 1000
-        assert cfg.get_value("pools.load_balancer.weight_cpu") == 0.7
+        assert cfg.get_value("core.task.timeout") == 10.0
 
     def test_file_loading_empty_object(self, tmp_path: Path):
         """Пустой файл {} — все дефолты на месте."""
@@ -291,21 +276,21 @@ class TestEnvOverlay:
 
     def test_env_numeric_int(self, monkeypatch):
         """ENV числовое значение конвертируется в int."""
-        monkeypatch.setenv("MIA_LB_MAX_ACTIVE_TASKS", "20")
+        monkeypatch.setenv("MIA_TASK_RETRY", "20")
 
         cfg = MiaConfig.load()
 
-        assert cfg.get_value("pools.load_balancer.max_active_tasks") == 20
-        assert isinstance(cfg.get_value("pools.load_balancer.max_active_tasks"), int)
+        assert cfg.get_value("core.task.retry") == 20
+        assert isinstance(cfg.get_value("core.task.retry"), int)
 
     def test_env_numeric_float(self, monkeypatch):
         """ENV числовое значение с точкой конвертируется в float."""
-        monkeypatch.setenv("MIA_LB_WEIGHT_CPU", "0.9")
+        monkeypatch.setenv("MIA_TASK_TIMEOUT", "0.9")
 
         cfg = MiaConfig.load()
 
-        assert cfg.get_value("pools.load_balancer.weight_cpu") == 0.9
-        assert isinstance(cfg.get_value("pools.load_balancer.weight_cpu"), float)
+        assert cfg.get_value("core.task.timeout") == 0.9
+        assert isinstance(cfg.get_value("core.task.timeout"), float)
 
     def test_env_string_value(self, monkeypatch):
         """ENV строковое значение остаётся строкой."""
@@ -345,8 +330,8 @@ class TestCascade:
         cfg = MiaConfig.load()
 
         assert cfg.get_value("core.task.timeout") == 10.0
-        assert cfg.get_value("pools.load_balancer.weight_cpu") == 0.7
-        assert cfg.get_value("monitoring.heartbeat.timeout") == 30.0
+        assert cfg.get_value("core.task.retry") == 0
+        assert cfg.get_value("storage.cache.backend") == "null"
 
 
 # ── Тесты определения пути ────────────────────────────────────────
@@ -413,12 +398,12 @@ class TestErrorHandling:
 
     def test_unknown_env_numeric_returns_string(self, monkeypatch, caplog):
         """Невалидное числовое ENV значение → строка + warning (не падает)."""
-        monkeypatch.setenv("MIA_LB_WEIGHT_CPU", "abc")
+        monkeypatch.setenv("MIA_TASK_TIMEOUT", "abc")
 
         cfg = MiaConfig.load()
 
         # Значение остаётся строкой (fallback)
-        assert cfg.get_value("pools.load_balancer.weight_cpu") == "abc"
+        assert cfg.get_value("core.task.timeout") == "abc"
         # Есть warning
         assert any("Invalid numeric" in r.message or "invalid" in r.message.lower()
                     for r in caplog.records)
@@ -434,12 +419,12 @@ class TestErrorHandling:
 
     def test_empty_env_value_for_non_string(self, monkeypatch):
         """Пустая строка для не-строкового ключа → строка ''."""
-        monkeypatch.setenv("MIA_LB_WEIGHT_CPU", "")
+        monkeypatch.setenv("MIA_TASK_TIMEOUT", "")
 
         cfg = MiaConfig.load()
 
         # Пустая строка не конвертируется в float
-        assert cfg.get_value("pools.load_balancer.weight_cpu") == ""
+        assert cfg.get_value("core.task.timeout") == ""
 
 
 # ── Тесты get_value ────────────────────────────────────────────────
@@ -483,26 +468,20 @@ class TestEnvMapping:
     """Таблица _ENV_TO_DOTPATH."""
 
     def test_env_mapping_count(self):
-        """Таблица содержит 40 записей (30 базовых + 10 worker thread_pool)."""
-        assert len(_ENV_TO_DOTPATH) == 40
+        """Таблица ENV без секций пула/heartbeat."""
+        assert len(_ENV_TO_DOTPATH) == 21
 
     def test_env_mapping_compound_names(self):
-        """Составные имена маппятся корректно (max_active_tasks, check_interval)."""
-        assert _ENV_TO_DOTPATH["MIA_LB_MAX_ACTIVE_TASKS"] == "pools.load_balancer.max_active_tasks"
-        assert _ENV_TO_DOTPATH["MIA_HEARTBEAT_CHECK_INTERVAL"] == "monitoring.heartbeat.check_interval"
+        """Составные имена маппятся корректно."""
         assert _ENV_TO_DOTPATH["MIA_STATS_WRITER_FLUSH_INTERVAL"] == "core.stats_writer.flush_interval"
+        assert _ENV_TO_DOTPATH["MIA_TASK_TIMEOUT"] == "core.task.timeout"
 
     def test_numeric_keys_count(self):
         """_NUMERIC_KEYS содержит все числовые dotpath."""
-        # Все dotpath из _ENV_TO_DOTPATH кроме строковых
         string_keys = {
             "modules.dir",
             "storage.cache.backend",
             "modules.verification.mode",
-            "pools.worker.count",
-            "pools.worker.cpu_affinity",
-            "pools.worker.thread_pool.mode",
-            "pools.worker.thread_pool.workload_type",
         }
         expected_numeric = set(_ENV_TO_DOTPATH.values()) - string_keys
         assert _NUMERIC_KEYS == expected_numeric

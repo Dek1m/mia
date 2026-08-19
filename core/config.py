@@ -31,37 +31,18 @@ _ENV_TO_DOTPATH: dict[str, str] = {
     "MIA_TASK_RETRY": "core.task.retry",
     "MIA_TASK_RETRY_DELAY": "core.task.retry_delay",
     "MIA_SHUTDOWN_TIMEOUT": "core.shutdown.timeout",
-    "MIA_WORKER_STOP_TIMEOUT": "pools.worker.stop_timeout",
     "MIA_DATABASE_LIST_LIMIT": "core.database.list_limit",
     "MIA_MODULE_MAX_INIT_SIZE": "modules.max_init_size",
     "MIA_ROUTING_STATS_UPDATE_INTERVAL": "core.routing.stats_update_interval",
-    "MIA_LB_WEIGHT_CPU": "pools.load_balancer.weight_cpu",
-    "MIA_LB_WEIGHT_TASKS": "pools.load_balancer.weight_tasks",
-    "MIA_LB_WEIGHT_STALE": "pools.load_balancer.weight_stale",
-    "MIA_LB_MAX_ACTIVE_TASKS": "pools.load_balancer.max_active_tasks",
-    "MIA_CPU_COLLECT_INTERVAL": "pools.cpu_metrics.collect_interval",
-    "MIA_WORKER_HEARTBEAT_PERIOD": "pools.worker.heartbeat_period",
     "MIA_RETRY_MAX_ATTEMPTS": "resilience.retry.max_attempts",
     "MIA_RETRY_BASE_DELAY": "resilience.retry.base_delay",
     "MIA_RETRY_MAX_DELAY": "resilience.retry.max_delay",
     "MIA_CB_FAILURE_THRESHOLD": "resilience.circuit_breaker.failure_threshold",
     "MIA_CB_RECOVERY_TIMEOUT": "resilience.circuit_breaker.recovery_timeout",
     "MIA_CB_SUCCESS_THRESHOLD": "resilience.circuit_breaker.success_threshold",
-    "MIA_HEARTBEAT_TIMEOUT": "monitoring.heartbeat.timeout",
-    "MIA_HEARTBEAT_CHECK_INTERVAL": "monitoring.heartbeat.check_interval",
     "MIA_MODULES_DIR": "modules.dir",
     "MIA_CACHE_BACKEND": "storage.cache.backend",
     "MIA_MODULE_VERIFICATION": "modules.verification.mode",
-    "MIA_WORKER_COUNT": "pools.worker.count",
-    "MIA_WORKER_CPU_AFFINITY": "pools.worker.cpu_affinity",
-    "MIA_THREAD_POOL_MODE": "pools.worker.thread_pool.mode",
-    "MIA_THREAD_POOL_WORKLOAD_TYPE": "pools.worker.thread_pool.workload_type",
-    "MIA_THREAD_POOL_TARGET_UTILIZATION": "pools.worker.thread_pool.target_utilization",
-    "MIA_THREAD_POOL_WAIT_TIME_MS": "pools.worker.thread_pool.wait_time_ms",
-    "MIA_THREAD_POOL_COMPUTE_TIME_MS": "pools.worker.thread_pool.compute_time_ms",
-    "MIA_THREAD_POOL_MIN_WORKERS": "pools.worker.thread_pool.min_workers",
-    "MIA_THREAD_POOL_MAX_WORKERS_CAP": "pools.worker.thread_pool.max_workers_cap",
-    "MIA_THREAD_POOL_MAX_THREADS": "pools.worker.thread_pool.max_threads",
 }
 
 # Типы значений для приведения из строк ENV
@@ -76,29 +57,14 @@ _NUMERIC_KEYS: set[str] = {
     "core.task.retry",
     "core.task.retry_delay",
     "core.shutdown.timeout",
-    "pools.worker.stop_timeout",
     "core.database.list_limit",
     "modules.max_init_size",
-    "pools.load_balancer.weight_cpu",
-    "pools.load_balancer.weight_tasks",
-    "pools.load_balancer.weight_stale",
-    "pools.load_balancer.max_active_tasks",
-    "pools.cpu_metrics.collect_interval",
-    "pools.worker.heartbeat_period",
     "resilience.retry.max_attempts",
     "resilience.retry.base_delay",
     "resilience.retry.max_delay",
     "resilience.circuit_breaker.failure_threshold",
     "resilience.circuit_breaker.recovery_timeout",
     "resilience.circuit_breaker.success_threshold",
-    "monitoring.heartbeat.timeout",
-    "monitoring.heartbeat.check_interval",
-    "pools.worker.thread_pool.target_utilization",
-    "pools.worker.thread_pool.wait_time_ms",
-    "pools.worker.thread_pool.compute_time_ms",
-    "pools.worker.thread_pool.min_workers",
-    "pools.worker.thread_pool.max_workers_cap",
-    "pools.worker.thread_pool.max_threads",
 }
 
 
@@ -112,7 +78,7 @@ class MiaConfig:
     Пример::
 
         cfg = MiaConfig.get()
-        timeout = cfg.get_value("monitoring.heartbeat.timeout", 30.0)
+        timeout = cfg.get_value("core.task.timeout", 10.0)
     """
 
     _instance: MiaConfig | None = None
@@ -196,33 +162,6 @@ class MiaConfig:
                     "list_limit": 100,
                 },
             },
-            "pools": {
-                "load_balancer": {
-                    "weight_cpu": 0.7,
-                    "weight_tasks": 0.2,
-                    "weight_stale": 0.1,
-                    "max_active_tasks": 10,
-                },
-                "cpu_metrics": {
-                    "collect_interval": 1.0,
-                },
-                "worker": {
-                    "count": "auto",
-                    "cpu_affinity": True,
-                    "heartbeat_period": 5.0,
-                    "stop_timeout": 5.0,
-                    "thread_pool": {
-                        "mode": "auto",
-                        "workload_type": "io_bound",
-                        "target_utilization": 0.75,
-                        "wait_time_ms": 50,
-                        "compute_time_ms": 5,
-                        "min_workers": 2,
-                        "max_workers_cap": 50,
-                        "max_threads": 4,
-                    },
-                },
-            },
             "resilience": {
                 "retry": {
                     "max_attempts": 3,
@@ -233,12 +172,6 @@ class MiaConfig:
                     "failure_threshold": 5,
                     "recovery_timeout": 30.0,
                     "success_threshold": 3,
-                },
-            },
-            "monitoring": {
-                "heartbeat": {
-                    "timeout": 30.0,
-                    "check_interval": 5.0,
                 },
             },
             "modules": {
@@ -252,12 +185,6 @@ class MiaConfig:
                 "cache": {
                     "backend": "null",
                 },
-            },
-            "shared_memory": {
-                "backend": "local",
-                "redis_url": "redis://localhost:6379",
-                "redis_prefix": "mia:",
-                "result_ttl": 300,
             },
         }
 

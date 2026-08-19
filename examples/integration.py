@@ -1,45 +1,29 @@
-"""Полная интеграция всех компонентов MIA.
+"""Полная интеграция компонентов MIA без локального пула воркеров.
 
 Демонстрирует:
-- Application: центральный оркестратор, создание и связывание компонентов
+- Application: composition root
 - Module lifecycle: discover → load → on_load → API → on_unload → shutdown
 - ApiProxy: state.api.module.method()
-- EventBus: pub/sub коммуникация между модулями
-- WorkerManager: multiprocessing dispatching с fault tolerance
-- Heartbeat: мониторинг процессов
-- Metrics: метрики обновляются
+- EventBus: pub/sub
 """
-import sys
 import os
+import sys
 
-# Корень проекта — в sys.path для импортов
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.application import Application
 from argenta_logging import get_logger
+from core.application import Application
 
 log = get_logger(__name__)
 
 
-def heavy_task(n: int) -> int:
-    """Функция для WorkerManager — должна быть на верхнем уровне (picklable)."""
-    return sum(i * i for i in range(n))
-
-
 def main() -> None:
-    """Запуск полной интеграции."""
     log.info("Integration test started")
 
-    # ── 1. Создание State ──────────────────────────────────────
-    log.info("Creating Application")
     state = Application(modules_dir="modules")
     state.startup()
-    log.info("Application started", extra={
-        "thread_pool": state.thread_pool is not None,
-        "heartbeat": state.heartbeat is not None,
-    })
+    log.info("Application started")
 
-    # ── 2. Module lifecycle ────────────────────────────────────
     log.info("Loading modules (auto-discover)")
     state.load_all_modules()
     loaded = state.modules.list_all()
@@ -49,18 +33,13 @@ def main() -> None:
         mod = state.modules.get(name)
         log.info("Module info", extra={"module": mod.name, "version": mod.version})
 
-    # ── 3. API calls через ApiProxy ────────────────────────────
     log.info("Testing API calls via state.api")
     result_add = state.api.sample.add(1, 2)
     result_mul = state.api.sample.multiply(3, 4)
-    log.info("API results", extra={
-        "add": result_add,
-        "multiply": result_mul,
-    })
+    log.info("API results", extra={"add": result_add, "multiply": result_mul})
     assert result_add == 3, f"Expected 3, got {result_add}"
     assert result_mul == 12, f"Expected 12, got {result_mul}"
 
-    # ── 4. EventBus: pub/sub ───────────────────────────────────
     log.info("Testing EventBus pub/sub")
     received = []
 
@@ -72,43 +51,9 @@ def main() -> None:
     log.info("Event received", extra={"received": received})
     assert received == [{"value": 42}]
 
-    # Публикация без подписчиков — не ошибка
     state.event_bus.publish("unsubscribed.event", "noise")
     log.info("Publish without subscribers: OK")
 
-    # ── 5. WorkerManager: multiprocessing dispatching ──────────
-    log.info("Testing WorkerManager multiprocessing")
-    wm = state.worker_manager
-    log.info("WorkerManager created", extra={"exists": wm is not None})
-
-    proc_result = wm.submit(heavy_task, 100)
-    log.info("Worker task result", extra={"task": "heavy_task", "arg": 100, "result": proc_result})
-    assert proc_result == sum(i * i for i in range(100))
-
-    proc_result2 = wm.submit(heavy_task, 10)
-    log.info("Worker task result", extra={"task": "heavy_task", "arg": 10, "result": proc_result2})
-    assert proc_result2 == sum(i * i for i in range(10))
-
-    # ── 7. Heartbeat: мониторинг процессов ─────────────────────
-    log.info("Testing Heartbeat monitoring")
-    active = state.heartbeat.active_count
-    log.info("Heartbeat active processes", extra={"count": active})
-    assert active >= 1
-
-    # ── 8. EventBus: событие process.died ──────────────────────
-    log.info("Testing EventBus process.died event")
-    death_events = []
-
-    def on_process_died(data):
-        death_events.append(data)
-
-    state.event_bus.subscribe("process.died", on_process_died)
-    # Симуляция — публикация вручную (в реальности приходит из heartbeat)
-    state.event_bus.publish("process.died", {"pid": 99999})
-    log.info("Death events received", extra={"events": death_events})
-    assert death_events == [{"pid": 99999}]
-
-    # ── 9. Выгрузка модуля ─────────────────────────────────────
     log.info("Testing module unload")
     state.unload_module("sample")
     assert "sample" not in state.modules.list_all()
@@ -119,7 +64,6 @@ def main() -> None:
     except AttributeError:
         log.info("Module access after unload raises AttributeError (expected)")
 
-    # ── 10. Shutdown ───────────────────────────────────────────
     log.info("Shutting down Application")
     state.shutdown()
     log.info("Application shutdown complete")

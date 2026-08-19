@@ -27,27 +27,11 @@ class ComputationInput(BaseModel):
 
 
 # ============================================================
-# Mock WorkerManager
-# ============================================================
-
-
-class FakeWorkerManager:
-    """Синхронный WorkerManager для тестов."""
-
-    def __init__(self) -> None:
-        self.submitted: list[tuple] = []
-
-    def submit(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
-        self.submitted.append((fn, args, kwargs))
-        return fn(*args, **kwargs)
-
-
 def _make_dispatcher() -> Any:
-    """Создать SmartDispatcher с FakeWorkerManager."""
-    from pools.smart_dispatcher import SmartDispatcher
+    """Локальный диспетчер для unit-тестов @task."""
+    from core.dispatch.local import LocalInvokeDispatcher
 
-    wm = FakeWorkerManager()
-    return SmartDispatcher(wm)
+    return LocalInvokeDispatcher()
 
 
 # ============================================================
@@ -228,7 +212,7 @@ class TestRetry:
             raise ValueError("Always fails")
 
         with pytest.raises(ValueError, match="Always fails"):
-            always_fail()
+            always_fail().result()
 
 
 # ============================================================

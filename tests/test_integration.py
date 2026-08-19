@@ -19,7 +19,7 @@ from communication.event_bus import EventBus
 
 
 def heavy_task(n: int) -> int:
-    """Функция для WorkerManager — должна быть на верхнем уровне."""
+    """CPU-задача для локального диспетчера."""
     return sum(i * i for i in range(n))
 
 
@@ -159,79 +159,42 @@ class TestParallelApiMethod:
     """@api_method(parallel=True) выполняется в потоке."""
 
     def test_parallel_api_method(self):
-        """parallel=True метод возвращает Future, выполняется в потоке."""
+        """parallel=True метод возвращает Future, выполняется локально."""
+        from core.dispatch.local import LocalInvokeDispatcher
+        from core.task_decorator import set_global_dispatcher
+
         state = Application(modules_dir="modules")
+        local = LocalInvokeDispatcher()
+        state._api_proxy._dispatcher = local
+        set_global_dispatcher(local)
         state.startup()
-
         state.load_module("sample")
-
-        # heavy_computation имеет parallel=True
         future = state.api.sample.heavy_computation([1, 2, 3, 4, 5])
         result = future.result(timeout=5)
-
         assert result == 15
-
         state.shutdown()
 
 
-class TestWorkerManagerDispatch:
-    """WorkerManager dispatches задачи."""
+class TestLocalDispatch:
+    """Локальный диспетчер исполняет задачи без пула процессов."""
 
-    def test_worker_manager_dispatch(self):
-        """WorkerManager отправляет задачи и получает результаты."""
+    def test_local_dispatch(self):
+        from core.dispatch.local import LocalInvokeDispatcher
+
+        dp = LocalInvokeDispatcher()
+        result = dp.dispatch(heavy_task, 100)
+        assert result == sum(i * i for i in range(100))
+
+
+class TestStartupDoesNotSpawn:
+    """startup() не порождает дочерних процессов."""
+
+    def test_startup_no_workers(self):
+        import multiprocessing
+
         state = Application(modules_dir="modules")
         state.startup()
-
-        wm = state.worker_manager
-        assert wm is not None
-
-        result = wm.submit(heavy_task, 100)
-        expected = sum(i * i for i in range(100))
-        assert result == expected
-
-        state.shutdown()
-
-
-class TestWorkerAutostart:
-    """Автозапуск воркеров через Application.startup()."""
-
-    def test_startup_autostart_workers(self):
-        """startup() автоматически запускает воркеров по числу ядер."""
-        import os
-        state = Application(modules_dir="modules")
-        state.startup()
-
-        wm = state.worker_manager
-        ids = wm.get_worker_ids()
-        assert len(ids) == os.cpu_count()
-        assert all(isinstance(i, int) for i in ids)
-
-        state.shutdown()
-
-
-class TestHeartbeatMonitoring:
-    """HeartbeatMonitor отслеживает процессы."""
-
-    def test_heartbeat_monitoring(self):
-        """HeartbeatMonitor отслеживает зарегистрированные процессы."""
-        state = Application(modules_dir="modules")
-        state.startup()
-
-        # Запоминаем количество уже зарегистрированных воркеров
-        base_count = state.heartbeat.active_count
-
-        # Регистрируем фейковый PID
-        state.heartbeat.register(12345)
-        assert state.heartbeat.active_count == base_count + 1
-
-        # Обновляем heartbeat
-        state.heartbeat.update(12345)
-        assert state.heartbeat.active_count == base_count + 1
-
-        # Выегистрируем
-        state.heartbeat.unregister(12345)
-        assert state.heartbeat.active_count == base_count
-
+        assert multiprocessing.active_children() == []
         state.shutdown()
 
 
@@ -243,7 +206,7 @@ class TestMetricsUpdated:
         from monitoring.metrics import (
             api_calls_total,
             api_duration_seconds,
-            worker_manager_active,
+            cache_l0_size,
         )
 
         # Проверяем, что объекты метрик существуют и функциональны
@@ -258,10 +221,8 @@ class TestMetricsUpdated:
         hist.observe(0.05)
         assert hist._sum.get() >= 0.05
 
-        # Workers gauge
-        workers = worker_manager_active
-        workers.set(4)
-        assert workers._value.get() == 4
+        cache_l0_size.set(4)
+        assert cache_l0_size._value.get() == 4
 
     def test_metrics_labels_correct(self):
         """Метрики имеют правильные labels."""

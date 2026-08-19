@@ -24,21 +24,10 @@ import pytest
 
 from core.task import Task, TaskStatus, TaskType
 from core.task_decorator import task, set_global_dispatcher
-from pools.smart_dispatcher import SmartDispatcher, _task_type_to_metric_key
+from core.dispatch.local import LocalInvokeDispatcher
 
 
 # ── Fixtures ──────────────────────────────────────────────
-
-
-class FakeWorkerManager:
-    """Синхронный WorkerManager."""
-
-    def __init__(self) -> None:
-        self.submitted: list[tuple] = []
-
-    def submit(self, fn, *args, **kwargs):
-        self.submitted.append((fn, args, kwargs))
-        return fn(*args, **kwargs)
 
 
 class FakeThreadPool:
@@ -60,39 +49,21 @@ class FakeThreadPool:
 
 @pytest.fixture
 def fake_dispatcher():
-    """SmartDispatcher с FakeWorkerManager и SharedMemory."""
-    wm = FakeWorkerManager()
-    from core.shared_memory import SharedMemory
-    sm = SharedMemory(backend="local", num_blocks=16, block_size=4096)
-    sm.start()
-    dp = SmartDispatcher(wm, shared_memory=sm)
-    return dp, wm, sm
+    dp = LocalInvokeDispatcher()
+    return dp, None, None
 
 
 @pytest.fixture
 def real_dispatcher():
-    """SmartDispatcher с FakeWorkerManager."""
-    wm = FakeWorkerManager()
-    from core.shared_memory import SharedMemory
-    sm = SharedMemory(backend="local", num_blocks=16, block_size=4096)
-    sm.start()
-    dp = SmartDispatcher(wm, shared_memory=sm)
-    yield dp, wm
-    sm.shutdown()
+    yield LocalInvokeDispatcher(), None
 
 
 @pytest.fixture
 def full_dispatcher():
-    """SmartDispatcher с FakeWorkerManager."""
-    wm = FakeWorkerManager()
-    from core.shared_memory import SharedMemory
-    sm = SharedMemory(backend="local", num_blocks=16, block_size=4096)
-    sm.start()
-    dp = SmartDispatcher(wm, shared_memory=sm)
-    return dp, wm
+    return LocalInvokeDispatcher(), None
 
 
-# ── 1. Async bridge: async-функция диспатчится через WorkerManager ──
+# ── 1. Async bridge: async-функция диспатчится локально ──
 
 
 class TestAsyncBridge:
@@ -122,7 +93,6 @@ class TestAsyncBridge:
         future = dp.dispatch_async(async_fn, 5)
         result = future.result(timeout=5)
         assert result == 10
-        assert len(wm.submitted) == 1
 
     def test_async_function_with_task_object(self, fake_dispatcher) -> None:
         """dispatch_async с явным Task-объектом."""
@@ -451,21 +421,9 @@ class TestDbTransaction:
 class TestMetrics:
     """Проверка: метрики корректно инкрементируются через Prometheus."""
 
-    def test_task_type_to_metric_key_all_types(self) -> None:
-        """_task_type_to_metric_key: все типы маппятся корректно."""
-        expected = {
-            TaskType.IO: "unknown",
-            TaskType.CPU: "cpu",
-            TaskType.GPU: "gpu",
-            TaskType.NETWORK: "network",
-            TaskType.DATABASE: "database",
-            TaskType.AGGREGATE: "aggregate",
-            TaskType.UNKNOWN: "unknown",
-        }
-
-        for tt, expected_key in expected.items():
-            actual = _task_type_to_metric_key(tt)
-            assert actual == expected_key, f"{tt} → {actual}, ожидалось {expected_key}"
+    def test_task_type_values_stable(self) -> None:
+        assert TaskType.CPU.value == "cpu"
+        assert TaskType.DATABASE.value == "database"
 
 
 # ── 8. ISmartDispatcher: dispatch_async в интерфейсе ──
@@ -485,16 +443,14 @@ class TestISmartDispatcherInterface:
 
     def test_smart_dispatcher_implements_dispatch_async(self) -> None:
         """SmartDispatcher реализует dispatch_async."""
-        wm = FakeWorkerManager()
-        dp = SmartDispatcher(wm)
+        dp = LocalInvokeDispatcher()
 
         assert hasattr(dp, "dispatch_async")
         assert callable(dp.dispatch_async)
 
     def test_smart_dispatcher_implements_interface_methods(self) -> None:
-        """SmartDispatcher реализует все методы ISmartDispatcher."""
-        wm = FakeWorkerManager()
-        dp = SmartDispatcher(wm)
+        """LocalInvokeDispatcher реализует все методы ISmartDispatcher."""
+        dp = LocalInvokeDispatcher()
 
         assert hasattr(dp, "dispatch")
         assert hasattr(dp, "dispatch_async")
@@ -532,8 +488,7 @@ class TestGlobalDispatcher:
         """set_global_dispatcher → _resolve_dispatcher возвращает тот же объект."""
         from core.task_decorator import _resolve_dispatcher
 
-        wm = FakeWorkerManager()
-        dp = SmartDispatcher(wm)
+        dp = LocalInvokeDispatcher()
         set_global_dispatcher(dp)
         assert _resolve_dispatcher() is dp
 

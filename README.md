@@ -1,6 +1,14 @@
 # mia
 
-State Manager с модульной системой и multiprocessing dispatching для Python 3.10+.
+State Manager с модульной системой. Python >= 3.11.
+
+belle — один процесс, обёртка вокруг `Application()`. `@task` кладётся в Redis (очередь `mia`). Исполняет shaltir worker:
+
+```bash
+SHALTIR_INCLUDE=core.dispatch.tasks SHALTIR_CELERY_QUEUE=mia python -m shaltir worker
+```
+
+`Application()` без `dispatcher=` шлёт в shaltir. Для тестов: `MIA_DISPATCH=local` (in-process).
 
 Проект находится в активной разработке (v0.0.0).
 
@@ -152,16 +160,9 @@ Prometheus метрики доступны через `MetricsServer` на по�
 |---------|-----|----------|
 | `state_api_calls_total` | Counter | Счётчик вызовов API (labels: module, method, status) |
 | `state_api_duration_seconds` | Histogram | Время выполнения API-вызова (labels: module, method) |
-| `state_processes_active` | Gauge | Количество активных процессов |
-| `state_processes_spawned_total` | Counter | Счётчик запущенных процессов |
-| `state_processes_killed_total` | Counter | Счётчик завершённых процессов |
-| `state_threads_active` | Gauge | Количество активных потоков |
-| `state_tasks_queue_size` | Gauge | Размер очереди задач |
-| `state_tasks_completed_total` | Counter | Счётчик завершённых задач (labels: status) |
-| `state_tasks_failed_total` | Counter | Счётчик упавших задач (labels: error_type) |
-| `state_heartbeat_missed_total` | Counter | Счётчик пропущенных heartbeat |
-| `state_memory_bytes` | Gauge | Использование shared memory (labels: segment) |
-| `state_module_loads_total` | Counter | Счётчик загрузок модулей (labels: module, status) |
+| `task_created_total` | Counter | Созданные задачи (labels: module, task_type) |
+| `task_completed_total` | Counter | Завершённые задачи (labels: module, task_type, status) |
+| `database_operations_total` | Counter | Операции Database |
 
 Запуск сервера метрик:
 

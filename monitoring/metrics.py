@@ -1,17 +1,13 @@
 """Prometheus метрики для State Manager.
 
-Метрики именуются по компонентам (слоям), а не по проекту,
-поскольку библиотека встраивается в другие проекты.
+Метрики именуются по компонентам (слоям), а не по проекту.
 
 Префиксы:
-  - api_        — API Proxy (вызовы методов)
-  - processpool_— ProcessPool
-  - heartbeat_  — HeartbeatMonitor
-  - cpu_        — CpuMetricsCollector, CpuAffinityProvider
-  - loadbalancer_ — LoadBalancer
-  - worker_manager_ — WorkerManager
-  - dispatcher_ — SmartDispatcher
+  - api_        — API Proxy
+  - dispatcher_ — диспетчер задач
   - cache_      — CacheHierarchy
+  - database_   — Database
+  - task_       — Universal Task System
 """
 from __future__ import annotations
 
@@ -37,111 +33,6 @@ api_duration_seconds = Histogram(
     "API method call duration",
     ["module", "method"],
     buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
-)
-
-
-# ============================================================
-# ProcessPool — процессы
-# ============================================================
-
-processpool_spawned_total = Counter(
-    "processpool_spawned_total",
-    "Total processes spawned",
-)
-
-processpool_killed_total = Counter(
-    "processpool_killed_total",
-    "Total processes killed",
-)
-
-
-# ============================================================
-# Heartbeat — мониторинг
-# ============================================================
-
-heartbeat_missed_total = Counter(
-    "heartbeat_missed_total",
-    "Total missed heartbeats",
-)
-
-
-# ============================================================
-# CPU Metrics — сбор метрик CPU
-# ============================================================
-
-cpu_load = Gauge(
-    "cpu_load",
-    "Overall CPU load (0.0 - 1.0)",
-)
-
-cpu_per_core_load = Gauge(
-    "cpu_per_core_load",
-    "Per-core CPU load (0.0 - 1.0)",
-    ["core"],
-)
-
-
-# ============================================================
-# Load Balancer — балансировка нагрузки
-# ============================================================
-
-loadbalancer_score = Histogram(
-    "loadbalancer_score",
-    "Worker selection score distribution",
-    buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
-)
-
-loadbalancer_selections_total = Counter(
-    "loadbalancer_selections_total",
-    "Total worker selections",
-    ["worker_id"],
-)
-
-loadbalancer_no_worker_total = Counter(
-    "loadbalancer_no_worker_total",
-    "Total selections with no available worker",
-)
-
-
-# ============================================================
-# Worker Manager — управление воркерами
-# ============================================================
-
-worker_manager_active = Gauge(
-    "worker_manager_active",
-    "Active workers managed by WorkerManager",
-)
-
-worker_manager_restarts_total = Counter(
-    "worker_manager_restarts_total",
-    "Total worker restarts",
-)
-
-worker_manager_tasks_submitted_total = Counter(
-    "worker_manager_tasks_submitted_total",
-    "Total tasks submitted through WorkerManager",
-    ["status"],
-)
-
-worker_manager_task_duration_seconds = Histogram(
-    "worker_manager_task_duration_seconds",
-    "Task execution duration in WorkerManager",
-    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
-)
-
-
-# ============================================================
-# CPU Affinity — привязка к ядрам
-# ============================================================
-
-cpu_affinity_set_total = Counter(
-    "cpu_affinity_set_total",
-    "Total successful CPU affinity bindings",
-)
-
-cpu_affinity_errors_total = Counter(
-    "cpu_affinity_errors_total",
-    "Total CPU affinity binding errors",
 )
 
 

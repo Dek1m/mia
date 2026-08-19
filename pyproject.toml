@@ -5,33 +5,35 @@ build-backend = "setuptools.backends._legacy:_Backend"
 [project]
 name = "mia"
 version = "0.3.0"
-description = "State Manager with module system, multiprocessing dispatching, and WorkerManager"
-requires-python = ">=3.10"
+description = "State Manager with module system"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [{name = "Argenta Team"}]
-dependencies = ["argenta-logging>=0.1.0", "argon2-cffi>=23.1.0", "PyJWT>=2.8.0"]
+dependencies = [
+    "argenta-logging>=0.1.0",
+    "argon2-cffi>=23.1.0",
+    "PyJWT>=2.8.0",
+    "shaltir @ file:../shaltir",
+    "cryptography>=42",
+]
 
 [project.optional-dependencies]
 metrics = ["prometheus-client>=0.20.0"]
 db = ["psycopg[binary]>=3.0.0", "psycopg_pool>=3.0.0"]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21.0", "prometheus-client>=0.20.0"]
 
-[tool.setuptools]
-py-modules = [
-    "core.interfaces", "core.errors", "core.application", "core.factories",
-    "core.config", "core.service_registry", "core.task", "core.task_decorator",
-    "modules_system.module_base", "modules_system.module_manager",
-    "modules_system.module_registry",
-    "pools.thread_pool", "pools.cpu_affinity",
-    "pools.cpu_metrics", "pools.load_balancer", "pools.worker_manager",
-    "monitoring.heartbeat_monitor", "monitoring.health_check",
-    "monitoring.metrics",
-    "resilience.retry", "resilience.circuit_breaker",
-    "resilience.shutdown_manager",
-    "storage.shared_memory", "storage.serializer", "storage.cache_interface", "storage.logging_config",
-    "communication.event_bus", "communication.api_proxy",
+[tool.setuptools.packages.find]
+include = [
+    "core*",
+    "modules_system*",
+    "monitoring*",
+    "resilience*",
+    "storage*",
+    "communication*",
 ]
+exclude = ["pools*", "tests*", "modules*", "examples*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 import-mode = "importlib"
+markers = []

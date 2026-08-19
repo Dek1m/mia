@@ -1,28 +1,26 @@
 """Database facade — делегирует CRUD провайдерам."""
 from __future__ import annotations
 
-import pickle
 import time
 from typing import Any
-from uuid import uuid4
 
 from argenta_logging import get_logger
 from core.interfaces import IDatabase
 from monitoring.metrics import (
-    database_operations_total,
-    database_operation_duration_seconds,
     database_cache_hits_total,
     database_cache_misses_total,
+    database_operation_duration_seconds,
+    database_operations_total,
 )
 
 log = get_logger(__name__)
 
 
 class Database(IDatabase):
-    """Фасад Database — управляет реестром провайдеров.
+    """Фасад Database — реестр провайдеров.
 
-    Опционально интегрируется с Universal Task System:
-    каждая CRUD-операция проходит через SmartDispatcher.
+    Если задан dispatcher — CRUD идёт через него (обычно LocalInvoke).
+    Иначе — прямой _delegate в провайдер.
     """
 
     def __init__(
@@ -30,7 +28,6 @@ class Database(IDatabase):
         cache: Any | None = None,
         dispatcher: Any | None = None,
         stats_writer: Any | None = None,
-        shared_memory: Any | None = None,
         module_meta: Any | None = None,
     ) -> None:
         self._providers: dict[str, Any] = {}
@@ -38,7 +35,6 @@ class Database(IDatabase):
         self._cache = cache
         self._dispatcher = dispatcher
         self._stats_writer = stats_writer
-        self._shared_memory = shared_memory
         self._module_meta = module_meta
 
     def register_provider(self, name: str, provider: Any, is_default: bool = False) -> None:
@@ -53,198 +49,67 @@ class Database(IDatabase):
         return self._providers[target]
 
     def _delegate(self, method_name: str, *args: Any, **kwargs: Any) -> Any:
-        provider = self.get_provider()
-        method = getattr(provider, method_name)
-        return method(*args, **kwargs)
+        return getattr(self.get_provider(), method_name)(*args, **kwargs)
+
+    def _call(self, stub: Any, operation: str, *args: Any) -> Any:
+        start = time.monotonic()
+        try:
+            if self._dispatcher is not None:
+                result = self._dispatcher.dispatch(stub, *args)
+            else:
+                result = stub(*args)
+            database_operations_total.labels(operation=operation, status="ok").inc()
+            return result
+        except Exception as e:
+            database_operations_total.labels(operation=operation, status="error").inc()
+            log.error(f"db_{operation}_error", extra={"error": str(e)})
+            raise
+        finally:
+            database_operation_duration_seconds.labels(operation=operation).observe(
+                time.monotonic() - start
+            )
 
     def get(self, table: str, id: str) -> dict | None:
         cache_key = f"db:{table}:{id}"
-
-        # Кеш из ModuleMeta (TTL-кеш, если method прописан в cache_rules)
-        if self._module_meta and "get" in self._module_meta.cache_rules:
-            ttl = self._module_meta.cache_rules["get"]
-            cached = self._cache.get(cache_key) if self._cache else None
-            if cached is not None:
-                database_cache_hits_total.labels(level="l0").inc()
-                log.debug("cache_hit", extra={"table": table, "id": id})
-                return cached
-            database_cache_misses_total.inc()
-        elif self._cache is not None:
-            cached = self._cache.get(cache_key)
-            if cached is not None:
-                database_cache_hits_total.labels(level="l0").inc()
-                log.debug("cache_hit", extra={"table": table, "id": id})
-                return cached
-            database_cache_misses_total.inc()
-
-        start = time.monotonic()
-        try:
-            # Всё через SharedMemory → WorkerManager → воркер → ThreadPool
-            if self._shared_memory is not None:
-                from core.shared_memory import TaskData
-                task_data = TaskData(
-                    uuid=str(uuid4()),
-                    function_name="get",
-                    module_name="db",
-                    args_serialized=pickle.dumps((table, id)),
-                    kwargs_serialized=pickle.dumps({}),
-                    created_at=time.time(),
-                )
-                self._shared_memory.submit_task(task_data)
-                result = self._shared_memory.get_result(task_data.uuid)
-            elif self._dispatcher is not None:
-                result = self._dispatcher.dispatch(self._provider_get, table, id)
-            else:
-                result = self._delegate("get", table, id)
-
-            database_operations_total.labels(operation="get", status="ok").inc()
-            log.debug("db_get", extra={"table": table, "id": id, "found": result is not None})
-        except Exception as e:
-            database_operations_total.labels(operation="get", status="error").inc()
-            log.error("db_get_error", extra={"table": table, "id": id, "error": str(e)})
-            raise
-        finally:
-            database_operation_duration_seconds.labels(operation="get").observe(time.monotonic() - start)
-
+        cached = self._cache_get(cache_key, "get")
+        if cached is not None:
+            log.debug("cache_hit", extra={"table": table, "id": id})
+            return cached
+        result = self._call(self._provider_get, "get", table, id)
+        log.debug("db_get", extra={"table": table, "id": id, "found": result is not None})
         if result is not None and self._cache is not None:
             self._cache.set(cache_key, result)
         return result
 
     def get_by_field(self, table: str, field: str, value: Any) -> dict | None:
         cache_key = f"db:{table}:{field}:{value}"
-
-        # Кеш из ModuleMeta
-        if self._module_meta and "get_by_field" in self._module_meta.cache_rules:
-            cached = self._cache.get(cache_key) if self._cache else None
-            if cached is not None:
-                database_cache_hits_total.labels(level="l0").inc()
-                log.debug("cache_hit", extra={"table": table, "field": field})
-                return cached
-            database_cache_misses_total.inc()
-        elif self._cache is not None:
-            cached = self._cache.get(cache_key)
-            if cached is not None:
-                database_cache_hits_total.labels(level="l0").inc()
-                log.debug("cache_hit", extra={"table": table, "field": field})
-                return cached
-            database_cache_misses_total.inc()
-
-        start = time.monotonic()
-        try:
-            if self._dispatcher is not None:
-                result = self._dispatcher.dispatch(self._provider_get_by_field, table, field, value)
-            else:
-                result = self._delegate("get_by_field", table, field, value)
-
-            database_operations_total.labels(operation="get_by_field", status="ok").inc()
-            log.debug("db_get_by_field", extra={"table": table, "field": field, "found": result is not None})
-        except Exception as e:
-            database_operations_total.labels(operation="get_by_field", status="error").inc()
-            log.error("db_get_by_field_error", extra={"table": table, "field": field, "error": str(e)})
-            raise
-        finally:
-            database_operation_duration_seconds.labels(operation="get_by_field").observe(time.monotonic() - start)
-
+        cached = self._cache_get(cache_key, "get_by_field")
+        if cached is not None:
+            log.debug("cache_hit", extra={"table": table, "field": field})
+            return cached
+        result = self._call(self._provider_get_by_field, "get_by_field", table, field, value)
+        log.debug("db_get_by_field", extra={"table": table, "field": field, "found": result is not None})
         if result is not None and self._cache is not None:
             self._cache.set(cache_key, result)
         return result
 
     def insert(self, table: str, data: dict) -> str:
-        start = time.monotonic()
-        try:
-            # Всё через SharedMemory → WorkerManager → воркер → ThreadPool
-            if self._shared_memory is not None:
-                from core.shared_memory import TaskData
-                task_data = TaskData(
-                    uuid=str(uuid4()),
-                    function_name="insert",
-                    module_name="db",
-                    args_serialized=pickle.dumps((table, data)),
-                    kwargs_serialized=pickle.dumps({}),
-                    created_at=time.time(),
-                )
-                self._shared_memory.submit_task(task_data)
-                result = self._shared_memory.get_result(task_data.uuid)
-            elif self._dispatcher is not None:
-                result = self._dispatcher.dispatch(self._provider_insert, table, data)
-            else:
-                result = self._delegate("insert", table, data)
-
-            database_operations_total.labels(operation="insert", status="ok").inc()
-            log.debug("db_insert", extra={"table": table, "id": result})
-        except Exception as e:
-            database_operations_total.labels(operation="insert", status="error").inc()
-            log.error("db_insert_error", extra={"table": table, "error": str(e)})
-            raise
-        finally:
-            database_operation_duration_seconds.labels(operation="insert").observe(time.monotonic() - start)
-
+        result = self._call(self._provider_insert, "insert", table, data)
+        log.debug("db_insert", extra={"table": table, "id": result})
         if self._cache is not None:
             self._invalidate_table(table)
         return result
 
     def update(self, table: str, id: str, data: dict) -> dict | None:
-        start = time.monotonic()
-        try:
-            if self._shared_memory is not None:
-                from core.shared_memory import TaskData
-                task_data = TaskData(
-                    uuid=str(uuid4()),
-                    function_name="update",
-                    module_name="db",
-                    args_serialized=pickle.dumps((table, id, data)),
-                    kwargs_serialized=pickle.dumps({}),
-                    created_at=time.time(),
-                )
-                self._shared_memory.submit_task(task_data)
-                result = self._shared_memory.get_result(task_data.uuid)
-            elif self._dispatcher is not None:
-                result = self._dispatcher.dispatch(self._provider_update, table, id, data)
-            else:
-                result = self._delegate("update", table, id, data)
-
-            database_operations_total.labels(operation="update", status="ok").inc()
-            log.debug("db_update", extra={"table": table, "id": id})
-        except Exception as e:
-            database_operations_total.labels(operation="update", status="error").inc()
-            log.error("db_update_error", extra={"table": table, "id": id, "error": str(e)})
-            raise
-        finally:
-            database_operation_duration_seconds.labels(operation="update").observe(time.monotonic() - start)
-
+        result = self._call(self._provider_update, "update", table, id, data)
+        log.debug("db_update", extra={"table": table, "id": id})
         if self._cache is not None:
             self._cache.delete(f"db:{table}:{id}")
         return result
 
     def delete(self, table: str, id: str) -> bool:
-        start = time.monotonic()
-        try:
-            if self._shared_memory is not None:
-                from core.shared_memory import TaskData
-                task_data = TaskData(
-                    uuid=str(uuid4()),
-                    function_name="delete",
-                    module_name="db",
-                    args_serialized=pickle.dumps((table, id)),
-                    kwargs_serialized=pickle.dumps({}),
-                    created_at=time.time(),
-                )
-                self._shared_memory.submit_task(task_data)
-                result = self._shared_memory.get_result(task_data.uuid)
-            elif self._dispatcher is not None:
-                result = self._dispatcher.dispatch(self._provider_delete, table, id)
-            else:
-                result = self._delegate("delete", table, id)
-
-            database_operations_total.labels(operation="delete", status="ok").inc()
-            log.debug("db_delete", extra={"table": table, "id": id, "success": result})
-        except Exception as e:
-            database_operations_total.labels(operation="delete", status="error").inc()
-            log.error("db_delete_error", extra={"table": table, "id": id, "error": str(e)})
-            raise
-        finally:
-            database_operation_duration_seconds.labels(operation="delete").observe(time.monotonic() - start)
-
+        result = self._call(self._provider_delete, "delete", table, id)
+        log.debug("db_delete", extra={"table": table, "id": id, "success": result})
         if result and self._cache is not None:
             self._cache.delete(f"db:{table}:{id}")
         return result
@@ -258,6 +123,7 @@ class Database(IDatabase):
     def list(self, table: str, filters: dict | None = None, limit: int | None = None, offset: int = 0) -> list[dict]:
         if limit is None:
             from core.config import MiaConfig
+
             limit = MiaConfig.get().get_value("core.database.list_limit", 100)
         return self._delegate("list", table, filters, limit, offset)
 
@@ -266,8 +132,6 @@ class Database(IDatabase):
 
     async def execute(self, query: str, *params: Any) -> str:
         return await self._delegate("execute", query, *params)
-
-    # === Provider stubs с метаданными для SmartDispatcher ===
 
     def _provider_get(self, table: str, id: str) -> dict | None:
         return self._delegate("get", table, id)
@@ -290,11 +154,22 @@ class Database(IDatabase):
     def set_dispatcher(self, dispatcher: Any) -> None:
         self._dispatcher = dispatcher
 
+    def _cache_get(self, cache_key: str, method: str) -> Any | None:
+        use_meta = bool(self._module_meta and method in getattr(self._module_meta, "cache_rules", {}))
+        if not use_meta and self._cache is None:
+            return None
+        if self._cache is None:
+            database_cache_misses_total.inc()
+            return None
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            database_cache_hits_total.labels(level="l0").inc()
+            return cached
+        database_cache_misses_total.inc()
+        return None
+
     def _invalidate_table(self, table: str) -> None:
-        """Инвалидировать кеш для таблицы (best-effort)."""
         if hasattr(self._cache, "clear"):
-            # Точечная инвалидация невозможна без keys scan — сбрасываем весь кеш
-            # Для production нужен prefix-based инвалидатор
             pass
 
     def shutdown(self) -> None:

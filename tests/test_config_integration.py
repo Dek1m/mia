@@ -16,11 +16,7 @@ import pytest
 
 from core.config import MiaConfig
 from core.application import Application
-from core.factories import (
-    HeartbeatFactory,
-    CpuMetricsCollectorFactory,
-    CacheFactory,
-)
+from core.factories import CacheFactory
 from modules_system.verification import VerificationMode
 
 
@@ -31,9 +27,12 @@ from modules_system.verification import VerificationMode
 def _reset_config():
     """Сброс singleton и ENV перед каждым тестом."""
     MiaConfig.reset()
-    saved = {k: v for k, v in os.environ.items() if k.startswith("MIA_")}
+    keep = {"MIA_DISPATCH", "MIA_TASK_CRYPTO_KEY", "MIA_TASK_CRYPTO_KEY_OLD"}
+    saved = {k: v for k, v in os.environ.items() if k.startswith("MIA_") and k not in keep}
     for k in saved:
         os.environ.pop(k, None)
+    os.environ.setdefault("MIA_DISPATCH", "local")
+    os.environ.setdefault("MIA_TASK_CRYPTO_KEY", "00" * 32)
     yield
     MiaConfig.reset()
     for k, v in saved.items():
@@ -72,46 +71,6 @@ class TestBackwardCompat:
         """CacheFactory.create('null') работает."""
         cache = CacheFactory.create("null")
         assert type(cache).__name__ == "NullCache"
-
-
-# ── Тесты фабрик ──────────────────────────────────────────────────
-
-
-class TestFactoryIntegration:
-    """Фабрики берут дефолты из MiaConfig."""
-
-    def test_heartbeat_factory_default(self):
-        """HeartbeatFactory: timeout=30.0, check_interval=5.0 из config."""
-        monitor = HeartbeatFactory.create()
-        # HeartbeatMonitor хранит timeout и check_interval
-        assert monitor._timeout == 30.0
-        assert monitor._check_interval == 5.0
-
-    def test_heartbeat_factory_from_config(self, monkeypatch):
-        """HeartbeatFactory: ENV MIA_HEARTBEAT_TIMEOUT=7 → timeout=7.0."""
-        monkeypatch.setenv("MIA_HEARTBEAT_TIMEOUT", "7")
-        MiaConfig.reset()
-        monitor = HeartbeatFactory.create()
-        assert monitor._timeout == 7.0
-
-    def test_heartbeat_factory_explicit_overrides_config(self, monkeypatch):
-        """HeartbeatFactory: explicit param > config."""
-        monkeypatch.setenv("MIA_HEARTBEAT_TIMEOUT", "7")
-        MiaConfig.reset()
-        monitor = HeartbeatFactory.create(timeout=99.0)
-        assert monitor._timeout == 99.0
-
-    def test_cpu_metrics_factory_default(self):
-        """CpuMetricsCollectorFactory: collect_interval=1.0 из config."""
-        collector = CpuMetricsCollectorFactory.create()
-        assert collector._collect_interval == 1.0
-
-    def test_cpu_metrics_factory_from_config(self, monkeypatch):
-        """CpuMetricsCollectorFactory: ENV MIA_CPU_COLLECT_INTERVAL=3.0."""
-        monkeypatch.setenv("MIA_CPU_COLLECT_INTERVAL", "3.0")
-        MiaConfig.reset()
-        collector = CpuMetricsCollectorFactory.create()
-        assert collector._collect_interval == 3.0
 
 
 # ── Тесты verification_mode priority ───────────────────────────────
@@ -165,32 +124,6 @@ class TestVerificationPriority:
         # С параметром: параметр побеждает ENV
         app2 = Application(verification_mode=VerificationMode.STRICT)
         assert app2.verification_mode == VerificationMode.STRICT
-
-
-# ── Тесты LoadBalancer конфигурации ────────────────────────────────
-
-
-class TestLoadBalancerConfig:
-    """Веса LoadBalancer из конфига."""
-
-    def test_load_balancer_default_weights(self):
-        """LoadBalancer: дефолтные веса weight_cpu=0.7, weight_tasks=0.2, weight_stale=0.1."""
-        from pools.load_balancer import LoadBalancer
-        lb = LoadBalancer()
-        assert lb.WEIGHT_CPU == 0.7
-        assert lb.WEIGHT_TASKS == 0.2
-        assert lb.WEIGHT_STALE == 0.1
-        assert lb.MAX_ACTIVE_TASKS == 10
-
-    def test_load_balancer_from_config(self, monkeypatch):
-        """LoadBalancer: ENV MIA_LB_WEIGHT_CPU=0.9 → WEIGHT_CPU=0.9."""
-        from pools.load_balancer import LoadBalancer
-        monkeypatch.setenv("MIA_LB_WEIGHT_CPU", "0.9")
-        monkeypatch.setenv("MIA_LB_MAX_ACTIVE_TASKS", "20")
-        MiaConfig.reset()
-        lb = LoadBalancer()
-        assert lb.WEIGHT_CPU == 0.9
-        assert lb.MAX_ACTIVE_TASKS == 20
 
 
 # ── Тесты modules.dir ─────────────────────────────────────────────

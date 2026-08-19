@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import functools
 import inspect
 import time
 import typing
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Protocol, TypeVar
 from uuid import UUID
 
 from argenta_logging import get_logger
@@ -82,14 +83,24 @@ def _resolve_dispatcher() -> Any | None:
     return None
 
 
+class ResultHandle(Protocol):
+    """Протокол результата диспетчера (обычно concurrent.futures.Future)."""
+
+    def result(self, timeout: float | None = None) -> Any: ...
+
+    def done(self) -> bool: ...
+
+    def exception(self, timeout: float | None = None) -> BaseException | None: ...
+
+
 class TaskFuture:
-    """Обёртка над Future с доступом к UUID задачи.
+    """Обёртка над handle с доступом к UUID задачи.
 
     Attributes:
         task_id: UUID задачи.
     """
 
-    def __init__(self, future: Future, task_id: UUID) -> None:
+    def __init__(self, future: ResultHandle, task_id: UUID) -> None:
         self._future = future
         self.task_id = task_id
 
@@ -115,7 +126,8 @@ class TaskFuture:
 
     def status(self) -> str:
         """Статус задачи: 'pending' | 'running' | 'completed' | 'failed'."""
-        if self._future.cancelled():
+        cancelled = getattr(self._future, "cancelled", None)
+        if callable(cancelled) and cancelled():
             return "cancelled"
         if self._future.done():
             try:
@@ -134,14 +146,10 @@ class TaskFuture:
         return self._future.exception(timeout=timeout)
 
     def __await__(self):
-        """Поддержка await для async-контекстов.
-
-        Конвертирует concurrent.futures.Future в asyncio.Future
-        для корректной работы с await.
-        """
-        return asyncio.ensure_future(
-            asyncio.wrap_future(self._future)
-        ).__await__()
+        """cf.Future → wrap_future; иначе не блокируем loop через to_thread."""
+        if isinstance(self._future, concurrent.futures.Future):
+            return asyncio.wrap_future(self._future).__await__()
+        return asyncio.to_thread(self._future.result).__await__()
 
 
 def task(
@@ -257,8 +265,9 @@ def task(
             for attempt in range(resolved_retry + 1):
                 try:
                     future = dispatcher.dispatch_async(task_obj, fn, *args, **kwargs)
-                    loop = asyncio.get_event_loop()
-                    return await asyncio.wrap_future(future, loop=loop)
+                    if isinstance(future, concurrent.futures.Future):
+                        return await asyncio.wrap_future(future)
+                    return await asyncio.to_thread(future.result)
                 except Exception as e:
                     last_error = e
                     if attempt < resolved_retry:

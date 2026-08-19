@@ -12,7 +12,7 @@ import pytest
 from core.database import Database
 from core.task import Task, TaskStatus, TaskType
 from core.task_decorator import task
-from pools.smart_dispatcher import SmartDispatcher
+from core.dispatch.local import LocalInvokeDispatcher
 
 
 # ============================================================
@@ -74,22 +74,6 @@ class InMemoryProvider:
 
 
 # ============================================================
-# Заглушки для SmartDispatcher
-# ============================================================
-
-
-class FakeWorkerManager:
-    """Синхронный WorkerManager."""
-
-    def __init__(self) -> None:
-        self.submitted: list = []
-
-    def submit(self, fn, *args, **kwargs):
-        self.submitted.append((fn, args, kwargs))
-        return fn(*args, **kwargs)
-
-
-# ============================================================
 # 1. Полный цикл: создание -> маршрутизация -> выполнение -> статистика
 # ============================================================
 
@@ -99,8 +83,7 @@ class TestFullCycle:
 
     def test_full_pipeline(self):
         """Task -> dispatch -> execute."""
-        wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(wm)
+        dispatcher = LocalInvokeDispatcher()
 
         def get_user(user_id: str) -> dict:
             return {"id": user_id, "name": "Alice"}
@@ -113,8 +96,7 @@ class TestFullCycle:
 
     def test_full_pipeline_with_explicit_task(self):
         """Явный Task -> dispatch -> execute."""
-        wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(wm)
+        dispatcher = LocalInvokeDispatcher()
 
         t = Task.create(module_id="api", fn_name="fetch_data")
 
@@ -129,8 +111,7 @@ class TestFullCycle:
 
     def test_full_pipeline_failure(self):
         """Задача падает -> исключение пробрасывается."""
-        wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(wm)
+        dispatcher = LocalInvokeDispatcher()
 
         def bad_fn():
             raise ValueError("connection timeout")
@@ -143,8 +124,7 @@ class TestFullCycle:
 
     def test_full_pipeline_multiple_tasks(self):
         """Несколько задач подряд — все корректно выполняются."""
-        wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(wm)
+        dispatcher = LocalInvokeDispatcher()
 
         for i in range(10):
             fn = lambda x, i=i: x + i
@@ -164,8 +144,7 @@ class TestOverflowRingBuffer:
 
     def test_overflow_25001_tasks(self):
         """Проверка что SmartDispatcher обрабатывает много задач без ошибок."""
-        wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(wm)
+        dispatcher = LocalInvokeDispatcher()
 
         for i in range(100):
             fn = lambda x, i=i: x + i
@@ -185,8 +164,7 @@ class TestConcurrentAddition:
 
     def test_10_threads_concurrent_dispatch(self):
         """10 потоков x 100 задач = 1000 задач через dispatcher."""
-        wm = FakeWorkerManager()
-        dispatcher = SmartDispatcher(wm)
+        dispatcher = LocalInvokeDispatcher()
         errors: list[Exception] = []
         barrier = threading.Barrier(10)
 

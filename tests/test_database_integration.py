@@ -8,14 +8,14 @@ from typing import Any
 from core.application import Application
 from core.database import Database
 from core.factories import CacheFactory
-from pools.smart_dispatcher import SmartDispatcher
+from core.dispatch.local import LocalInvokeDispatcher
+from core.interfaces import ISmartDispatcher
 from storage.cache_hierarchy import CacheHierarchy
 from monitoring.metrics import (
     database_operations_total,
     database_operation_duration_seconds,
     database_cache_hits_total,
     database_cache_misses_total,
-    worker_manager_tasks_submitted_total,
 )
 
 
@@ -82,6 +82,8 @@ class InMemoryProvider:
 def app() -> Any:
     """Application с hierarchy cache, startup → shutdown."""
     application = Application(modules_dir="modules", cache_backend="hierarchy")
+    local = LocalInvokeDispatcher()
+    application.database.set_dispatcher(local)
     application.startup()
     yield application
     application.shutdown()
@@ -106,42 +108,9 @@ def db_no_dispatcher(cache: CacheHierarchy) -> Database:
     return database
 
 
-class FakeWorkerManager:
-    """Заглушка WorkerManager — возвращает результат напрямую."""
-
-    def __init__(self) -> None:
-        self.submitted: list = []
-
-    def submit(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
-        self.submitted.append((fn, args, kwargs))
-        return fn(*args, **kwargs)
-
-
-class FakeThreadPool:
-    """Заглушка ThreadPool — возвращает результат напрямую."""
-
-    def __init__(self) -> None:
-        self.submitted: list = []
-
-    def submit(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
-        self.submitted.append((fn, args, kwargs))
-        return fn(*args, **kwargs)
-
-    def start(self) -> None:
-        pass
-
-    def shutdown(self, wait: bool = True) -> None:
-        pass
-
-
 @pytest.fixture
-def dispatcher() -> tuple[SmartDispatcher, FakeWorkerManager]:
-    """SmartDispatcher с мокнутым WorkerManager и SharedMemory."""
-    wm = FakeWorkerManager()
-    from core.shared_memory import SharedMemory
-    sm = SharedMemory(backend="local", num_blocks=16, block_size=4096)
-    sm.start()
-    return SmartDispatcher(wm, shared_memory=sm), wm
+def dispatcher() -> LocalInvokeDispatcher:
+    return LocalInvokeDispatcher()
 
 
 # ── 1. Полный цикл: Application → startup → Database → CRUD → shutdown ──
@@ -156,7 +125,7 @@ class TestFullLifecycle:
         assert db is not None
         assert isinstance(db, Database)
         assert db._dispatcher is not None
-        assert isinstance(db._dispatcher, SmartDispatcher)
+        assert isinstance(db._dispatcher, ISmartDispatcher)
         assert isinstance(db._cache, CacheHierarchy)
 
     def test_crud_through_application(self, app: Application, provider: InMemoryProvider) -> None:
@@ -343,86 +312,15 @@ class TestCacheIntegration:
 # ── 3. SmartDispatcher: маршрутизация работает ──
 
 
-class TestSmartDispatcherRouting:
-    """SmartDispatcher корректно маршрутизирует задачи по типам."""
+class TestLocalDispatch:
+    """LocalInvokeDispatcher исполняет задачи на месте."""
 
-    def _make_fn(self, db_type: str, lock: bool = False) -> Any:
-        """Создать функцию с метаданными _db_type и _db_lock."""
-        fn = lambda x: x * 2  # noqa: E731
-        fn._db_type = db_type
-        fn._db_lock = lock
-        fn.__name__ = f"{db_type}_task"
-        return fn
+    def test_dispatch_runs_fn(self, dispatcher: LocalInvokeDispatcher) -> None:
+        assert dispatcher.dispatch(lambda x: x * 2, 5) == 10
 
-    def test_read_routes_to_worker_manager(self, dispatcher: tuple) -> None:
-        """read-задача выполняется через SharedMemory."""
-        disp, wm = dispatcher
-        fn = self._make_fn("read")
-        result = disp.dispatch(fn, 5)
-        assert result == 10
-
-    def test_write_routes_to_worker_manager(self, dispatcher: tuple) -> None:
-        """write-задача выполняется через SharedMemory."""
-        disp, wm = dispatcher
-        fn = self._make_fn("write")
-        result = disp.dispatch(fn, 7)
-        assert result == 14
-
-    def test_transaction_routes_to_worker_manager(self, dispatcher: tuple) -> None:
-        """transaction-задача выполняется через SharedMemory."""
-        disp, wm = dispatcher
-        fn = self._make_fn("transaction")
-        result = disp.dispatch(fn, 3)
-        assert result == 6
-
-    def test_aggregate_routes_to_worker_manager(self, dispatcher: tuple) -> None:
-        """aggregate-задача выполняется через SharedMemory."""
-        disp, wm = dispatcher
-        fn = self._make_fn("aggregate")
-        result = disp.dispatch(fn, 4)
-        assert result == 8
-
-    def test_unknown_type_routes_to_worker_manager(self, dispatcher: tuple) -> None:
-        """Неизвестный тип выполняется через SharedMemory."""
-        disp, wm = dispatcher
-        fn = lambda: 42  # noqa: E731
-        result = disp.dispatch(fn)
-        assert result == 42
-
-    def test_write_lock_serializes_writes(self) -> None:
-        """write с _db_lock=True используется общая блокировка."""
-        wm = FakeWorkerManager()
-        from core.shared_memory import SharedMemory
-        sm = SharedMemory(backend="local", num_blocks=16, block_size=4096)
-        sm.start()
-        disp = SmartDispatcher(wm, shared_memory=sm)
-
-        fn = self._make_fn("write", lock=True)
-        result = disp.dispatch(fn, 10)
-        assert result == 20
-
-    def test_dispatch_multiple_types(self, dispatcher: tuple) -> None:
-        """Смешанная маршрутизация: все через SharedMemory."""
-        disp, wm = dispatcher
-        read_fn = self._make_fn("read")
-        write_fn = self._make_fn("write")
-        agg_fn = self._make_fn("aggregate")
-
-        disp.dispatch(read_fn, 1)
-        disp.dispatch(write_fn, 2)
-        disp.dispatch(agg_fn, 3)
-
-    def test_worker_manager_receives_correct_args(self, dispatcher: tuple) -> None:
-        """SharedMemory получает правильные аргументы."""
-        disp, wm = dispatcher
-
-        def add(a: int, b: int) -> int:
-            return a + b
-
-        add._db_type = "read"
-
-        result = disp.dispatch(add, 10, 20)
-        assert result == 30
+    def test_dispatch_multiple(self, dispatcher: LocalInvokeDispatcher) -> None:
+        assert dispatcher.dispatch(lambda x: x + 1, 1) == 2
+        assert dispatcher.dispatch(lambda a, b: a + b, 10, 20) == 30
 
 
 # ── 4. Observability: метрики инкрементируются ──
@@ -512,13 +410,9 @@ class TestObservabilityMetrics:
         after_ops = self._counter_value(database_operations_total, operation="insert", status="ok")
         assert after_ops > before_ops
 
-    def test_smart_dispatcher_metrics_increment(self, app: Application, provider: InMemoryProvider) -> None:
-        """SmartDispatcher метрики инкрементируются при dispatch."""
+    def test_get_through_application_increments(self, app: Application, provider: InMemoryProvider) -> None:
         app.database.register_provider("mem", provider, is_default=True)
-
-        before_wm = worker_manager_tasks_submitted_total.labels(status="ok")._value.get()
-
-        app.database.get("t", "1")  # read → WorkerManager
-
-        after_wm = worker_manager_tasks_submitted_total.labels(status="ok")._value.get()
-        assert after_wm > before_wm
+        before = self._counter_value(database_operations_total, operation="get", status="ok")
+        app.database.get("t", "1")
+        after = self._counter_value(database_operations_total, operation="get", status="ok")
+        assert after > before

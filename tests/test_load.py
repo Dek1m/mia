@@ -18,7 +18,7 @@ from communication.event_bus import EventBus
 
 
 def cpu_task(n: int) -> int:
-    """CPU-bound задача для WorkerManager."""
+    """CPU-bound задача для локального диспетчера."""
     return sum(i * i for i in range(n))
 
 
@@ -89,30 +89,19 @@ class TestManyEvents:
         state.shutdown()
 
 
-class TestWorkerManagerThroughput:
-    """50 задач в WorkerManager за < 5 секунд."""
+class TestLocalDispatchThroughput:
+    """50 локальных задач за < 5 секунд."""
 
-    def test_worker_manager_throughput(self):
-        """50 задач отправлены в WorkerManager и завершены."""
-        state = Application(modules_dir="modules")
-        state.startup()
+    def test_local_dispatch_throughput(self):
+        from core.dispatch.local import LocalInvokeDispatcher
 
-        wm = state.worker_manager
-
+        dp = LocalInvokeDispatcher()
         start = time.time()
-        results = []
-        for i in range(50):
-            r = wm.submit(cpu_task, 100)
-            results.append(r)
+        results = [dp.dispatch(cpu_task, 100) for _ in range(50)]
         elapsed = time.time() - start
-
-        print(f"\n50 worker tasks: {elapsed:.3f}s")
         assert len(results) == 50
-        for r in results:
-            assert r == sum(j * j for j in range(100))
+        assert all(r == sum(j * j for j in range(100)) for r in results)
         assert elapsed < 5.0, f"Слишком медленно: {elapsed:.3f}s"
-
-        state.shutdown()
 
 
 if __name__ == "__main__":

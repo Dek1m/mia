@@ -27,7 +27,7 @@ class ApiMethodProxy:
         start = time.monotonic()
         try:
             if getattr(self._method, "_parallel", False) and self._dispatcher is not None:
-                # parallel=True: dispatch через SmartDispatcher (WorkerManager)
+                # parallel=True: dispatch через ISmartDispatcher
                 result = self._dispatcher.dispatch_async(self._method, *args, **kwargs)
             else:
                 result = self._method(*args, **kwargs)

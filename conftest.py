@@ -1,50 +1,28 @@
-"""Root conftest — регистрирует фейковые пакеты для подмодулей.
-
-Модули теперь без дефисов (llm вместо mia-llm), но providers/ и auth-зависимости
-всё ещё нуждаются в ручной регистрации.
-"""
+"""Root conftest — LocalInvokeDispatcher для unit-тестов."""
 import importlib.util
+import os
 import sys
 import types
 from pathlib import Path
 
 import pytest
 
+os.environ.setdefault("MIA_DISPATCH", "local")
+os.environ.setdefault("MIA_TASK_CRYPTO_KEY", "00" * 32)
+
 _project_root = Path(__file__).resolve().parent
-
-
-# ── Глобальный mock SmartDispatcher для тестов ────────────────
-
-class _FakeWorkerManager:
-    """Синхронный WorkerManager для тестов."""
-
-    def __init__(self) -> None:
-        self.submitted: list = []
-
-    def submit(self, fn, *args, **kwargs):
-        self.submitted.append((fn, args, kwargs))
-        return fn(*args, **kwargs)
 
 
 @pytest.fixture(autouse=True)
 def _global_dispatcher():
-    """Установить mock SmartDispatcher для всех тестов.
-
-    Гарантирует что @task и @db_method декораторы работают
-    даже без Application.startup().
-    """
+    """@task и модули не ходят в Redis."""
+    from core.dispatch.local import LocalInvokeDispatcher
     from core.task_decorator import set_global_dispatcher
-    from core.shared_memory import SharedMemory
-    from pools.smart_dispatcher import SmartDispatcher
 
-    wm = _FakeWorkerManager()
-    sm = SharedMemory(backend="local", num_blocks=16, block_size=4096)
-    sm.start()
-    dp = SmartDispatcher(wm, shared_memory=sm)
-    set_global_dispatcher(dp)
-    yield dp
+    dispatcher = LocalInvokeDispatcher()
+    set_global_dispatcher(dispatcher)
+    yield dispatcher
     set_global_dispatcher(None)
-    sm.shutdown()
 
 
 def _register_package(pkg_name: str, module_dir: Path, submodules: list[str] | None = None) -> None:
@@ -62,7 +40,6 @@ def _register_package(pkg_name: str, module_dir: Path, submodules: list[str] | N
     _fake_pkg.__package__ = dotted
     sys.modules[dotted] = _fake_pkg
 
-    # Регистрируем алиас с подчёркиванием (modules.llm = modules.llm)
     python_name = pkg_name.replace("-", "_")
     if python_name != pkg_name:
         sys.modules[python_name] = _fake_pkg
@@ -85,7 +62,6 @@ def _register_package(pkg_name: str, module_dir: Path, submodules: list[str] | N
                 setattr(_fake_pkg, submod, mod)
 
 
-# ── LLM: providers subpackage (нужна отдельная регистрация) ──
 _llm_dir = _project_root / "modules" / "llm"
 _providers_dir = _llm_dir / "providers"
 if _providers_dir.exists() and "modules.llm.providers" not in sys.modules:
