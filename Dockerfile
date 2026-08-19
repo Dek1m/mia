@@ -18,9 +18,7 @@ RUN pip install --no-cache-dir \
     uvicorn>=0.23.0 \
     httpx>=0.24.0
 
-# argenta-logging from GitHub (internal package)
-RUN pip install --no-cache-dir git+https://github.com/Dek1m/argenta-logging.git 2>/dev/null || \
-    echo "argenta-logging not available, using stdlib logging"
+RUN pip install --no-cache-dir git+https://github.com/Dek1m/argenta-logging.git
 
 # App code
 COPY . .

@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [{name = "Argenta Team"}]
 dependencies = [
-    "argenta-logging>=0.1.0",
+    "argenta-logging @ git+https://github.com/Dek1m/argenta-logging.git",
     "argon2-cffi>=23.1.0",
     "PyJWT>=2.8.0",
     "shaltir @ file:../shaltir",
