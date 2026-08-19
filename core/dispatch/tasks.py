@@ -29,7 +29,13 @@ def _on_worker_process_init(**_kwargs: Any) -> None:
     from core.dispatch.local import LocalInvokeDispatcher
 
     _box = SecretBox.from_env()
-    app = Application(dispatcher=LocalInvokeDispatcher())
+    # Те же модули, что belle, не «все репозитории подряд».
+    allowed = [
+        m.strip()
+        for m in os.environ.get("MIA_WORKER_MODULES", "db,auth").split(",")
+        if m.strip()
+    ]
+    app = Application(dispatcher=LocalInvokeDispatcher(), allowed_modules=allowed)
     app.load_all_modules()
     registry = TaskTargetRegistry()
     for name in app.modules.list_all():
