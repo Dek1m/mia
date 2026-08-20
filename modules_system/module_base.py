@@ -87,10 +87,18 @@ class ModuleBase(ABC):
         return ModuleMeta()
 
     def on_load(self, state: "Application") -> None:  # noqa: F821
-        """Вызывается при загрузке модуля. Инициализация.
+        """Загрузка Python: DI, пулы, фасады. Без DDL и seed.
 
         Args:
             state: Экземпляр Application для доступа к другим модулям и API.
+        """
+        pass
+
+    def apply_schema(self, state: "Application") -> None:  # noqa: F821
+        """Накат схемы БД. Default no-op. Вызывает только migrate.
+
+        Args:
+            state: Тот же Application после on_load.
         """
         pass
 

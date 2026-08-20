@@ -215,6 +215,22 @@ class Application:
             except Exception as e:
                 log.error("Failed to load module", extra={"module_name": name, "error": str(e)})
 
+    def apply_schemas(self) -> None:
+        """Накат DDL загруженных модулей в topo-порядке. Только migrate."""
+        registry = self._services.resolve(IModuleRegistry)
+        names = registry.list_all()
+        log.info("apply_schemas_start", extra={"modules": names})
+        for name in names:
+            module = registry.get(name)
+            if module is None:
+                continue
+            apply = getattr(module, "apply_schema", None)
+            if apply is None:
+                continue
+            log.info("apply_schema", extra={"module_name": name})
+            apply(self)
+        log.info("apply_schemas_done", extra={"modules": names})
+
     def unload_module(self, name: str) -> None:
         registry = self._services.resolve(IModuleRegistry)
         try:
