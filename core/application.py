@@ -202,7 +202,6 @@ class Application:
             else:
                 self._module_versions[name] = "unknown:none"
                 self._module_verification[name] = False
-            log.info("Module loaded", extra={"module_name": name})
         except Exception as e:
             log.error("Failed to load module", extra={"module_name": name, "error": str(e)})
             raise ModuleLoadError(f"Failed to load module '{name}': {e}") from e
