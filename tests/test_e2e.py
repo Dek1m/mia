@@ -1,6 +1,6 @@
 """E2E tests — full system flow with mocks.
 
-Tests the complete chain: auth provider → apiproxy → rest/CLI.
+Tests the complete chain: auth provider → apiproxy → CLI.
 No real database — uses MockPool from auth tests conftest.
 
 Proxy only exposes methods decorated with @auth_method (needs_bootstrap, bootstrap)
@@ -379,158 +379,7 @@ class TestE2ELLM:
         assert fallback.name == "backup"
 
 
-# ── E2E 6: REST — FastAPI TestClient ──────────────────────
-
-
-@pytest.mark.asyncio
-class TestE2EREST:
-    """REST: TestClient with auth endpoints."""
-
-    async def test_rest_health(self, api_proxy):
-        """Health endpoint works without auth."""
-        from fastapi.testclient import TestClient
-        from modules.rest.app import create_app
-
-        app = create_app(proxy_provider=api_proxy)
-        client = TestClient(app)
-
-        resp = client.get("/api/v1/health")
-        assert resp.status_code == 200
-        assert resp.json()["status"] == "ok"
-
-    async def test_rest_auth_status(self, api_proxy):
-        """Auth status shows needs_bootstrap=True initially."""
-        from fastapi.testclient import TestClient
-        from modules.rest.app import create_app
-
-        app = create_app(proxy_provider=api_proxy)
-        client = TestClient(app)
-
-        resp = client.get("/api/v1/auth/status")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["error"] is None
-        # /api/v1/auth/status returns {"data": True/False, "error": None}
-        # (proxy.call wraps the boolean result directly)
-        assert body["data"] is True
-
-    async def test_rest_bootstrap_and_status(self, api_proxy):
-        """Bootstrap then status shows needs_bootstrap=False."""
-        from fastapi.testclient import TestClient
-        from modules.rest.app import create_app
-
-        app = create_app(proxy_provider=api_proxy)
-        client = TestClient(app)
-
-        # Bootstrap
-        resp = client.post("/api/v1/auth/bootstrap", json={
-            "username": "admin",
-            "password": "SecurePass123",
-        })
-        assert resp.status_code == 200
-
-        # Status after
-        resp = client.get("/api/v1/auth/status")
-        body = resp.json()
-        assert body["data"] is False
-
-    async def test_rest_bootstrap_conflict(self, api_proxy):
-        """Double bootstrap → 409 conflict."""
-        from fastapi.testclient import TestClient
-        from modules.rest.app import create_app
-
-        app = create_app(proxy_provider=api_proxy)
-        client = TestClient(app)
-
-        client.post("/api/v1/auth/bootstrap", json={
-            "username": "admin",
-            "password": "SecurePass123",
-        })
-
-        resp = client.post("/api/v1/auth/bootstrap", json={
-            "username": "admin2",
-            "password": "SecurePass456",
-        })
-        # Should be 409 conflict (already completed)
-        assert resp.status_code == 409
-
-    async def test_rest_bootstrap_bad_json(self, api_proxy):
-        """Bootstrap with invalid JSON → 400."""
-        from fastapi.testclient import TestClient
-        from modules.rest.app import create_app
-
-        app = create_app(proxy_provider=api_proxy)
-        client = TestClient(app)
-
-        resp = client.post(
-            "/api/v1/auth/bootstrap",
-            content="not json",
-            headers={"Content-Type": "application/json"},
-        )
-        assert resp.status_code == 400
-
-    async def test_rest_post_public_method(self, api_proxy):
-        """POST to public method works without token."""
-        from fastapi.testclient import TestClient
-        from modules.rest.app import create_app
-
-        app = create_app(proxy_provider=api_proxy)
-        client = TestClient(app)
-
-        resp = client.post("/api/v1/auth/needs_bootstrap", json={})
-        assert resp.status_code == 200
-        assert resp.json()["data"] is True
-
-    async def test_rest_get_query_params(self, api_proxy):
-        """GET /api/v1/auth?method=needs_bootstrap works."""
-        from fastapi.testclient import TestClient
-        from modules.rest.app import create_app
-
-        app = create_app(proxy_provider=api_proxy)
-        client = TestClient(app)
-
-        resp = client.get("/api/v1/auth?method=needs_bootstrap")
-        assert resp.status_code == 200
-        assert resp.json()["data"] is True
-
-    async def test_rest_get_missing_method_param(self, api_proxy):
-        """GET without method param → 400."""
-        from fastapi.testclient import TestClient
-        from modules.rest.app import create_app
-
-        app = create_app(proxy_provider=api_proxy)
-        client = TestClient(app)
-
-        resp = client.get("/api/v1/auth")
-        assert resp.status_code == 400
-        assert "Missing" in resp.json()["error"]["message"]
-
-    async def test_rest_list_modules(self, api_proxy):
-        """GET /api/v1 lists registered modules."""
-        from fastapi.testclient import TestClient
-        from modules.rest.app import create_app
-
-        app = create_app(proxy_provider=api_proxy)
-        client = TestClient(app)
-
-        resp = client.get("/api/v1")
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert "auth" in data
-
-    async def test_rest_unknown_route_404(self, api_proxy):
-        """Unknown route → 404 (FastAPI default)."""
-        from fastapi.testclient import TestClient
-        from modules.rest.app import create_app
-
-        app = create_app(proxy_provider=api_proxy)
-        client = TestClient(app)
-
-        resp = client.get("/api/v1/nonexistent")
-        assert resp.status_code == 404
-
-
-# ── E2E 7: CLI — parser help, client flow ─────────────────
+# ── E2E 6: CLI — parser help, client flow ─────────────────
 
 
 @pytest.mark.asyncio
@@ -604,7 +453,7 @@ class TestE2ECLI:
             "password": "SecurePass123",
         })
 
-        config = CliConfig(mode="local", token_file="/tmp/mia_e2e_test_token.json")
+        config = CliConfig(token_file="/tmp/mia_e2e_test_token.json")
         client = ApiClient(config=config, proxy_provider=api_proxy)
 
         result = await client._call_local("auth", "needs_bootstrap", {})
@@ -620,7 +469,7 @@ class TestE2ECLI:
         from modules.cli.client import ApiClient
         from modules.cli.config import CliConfig
 
-        config = CliConfig(mode="local")
+        config = CliConfig()
         client = ApiClient(config=config, proxy_provider=None)
 
         result = await client._call_local("auth", "login", {})
@@ -633,41 +482,27 @@ class TestE2ECLI:
 
 @pytest.mark.asyncio
 class TestE2EFullSystemIntegration:
-    """End-to-end: auth → proxy → rest serving requests."""
+    """End-to-end: auth → proxy, без HTTP."""
 
     async def test_full_system_flow(self, mock_pool, auth_config):
-        """Health → auth status → bootstrap → login → refresh → logout."""
-        from fastapi.testclient import TestClient
-        from modules.rest.app import create_app
-
+        """Status → bootstrap → login → refresh → logout."""
         auth_prov = AuthProvider(config=auth_config, pool=mock_pool)
         proxy_config = ApiproxyConfig(whitelist=["auth"])
         proxy = ApiProxyProvider(config=proxy_config, auth_provider=auth_prov)
         proxy.registry.collect_from_module(auth_prov, "auth")
 
-        app = create_app(proxy_provider=proxy)
-        client = TestClient(app)
+        status = await proxy.call("auth", "needs_bootstrap", {})
+        assert status["data"] is True
 
-        # 1. Health
-        resp = client.get("/api/v1/health")
-        assert resp.status_code == 200
-
-        # 2. Auth status
-        resp = client.get("/api/v1/auth/status")
-        assert resp.json()["data"] is True
-
-        # 3. Bootstrap via REST
-        resp = client.post("/api/v1/auth/bootstrap", json={
+        boot = await proxy.call("auth", "bootstrap", {
             "username": "admin",
             "password": "SecurePass123",
         })
-        assert resp.status_code == 200
+        assert boot["error"] is None
 
-        # 4. Status after bootstrap
-        resp = client.get("/api/v1/auth/status")
-        assert resp.json()["data"] is False
+        status = await proxy.call("auth", "needs_bootstrap", {})
+        assert status["data"] is False
 
-        # 5. Login via provider (not in proxy registry)
         login_result = await auth_prov.login("admin", "SecurePass123")
         assert "access_token" in login_result
 

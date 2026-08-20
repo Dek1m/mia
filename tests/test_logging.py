@@ -12,7 +12,7 @@ import pytest
 
 LOG_FORMAT_RE = re.compile(
     r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z)\] "
-    r"\[(DEBUG|INFO|WARNING|ERROR)\] "
+    r"\[(DEBUG|INFO|WARN|ERROR)\] "
     r"\[([a-z0-9-]+)\] "
     r"(.+?)(\s\{.*\})?$"
 )
@@ -44,8 +44,9 @@ def test_log_format_level():
     for level, expected in [
         (logging.DEBUG, "DEBUG"),
         (logging.INFO, "INFO"),
-        (logging.WARNING, "WARNING"),
+        (logging.WARNING, "WARN"),
         (logging.ERROR, "ERROR"),
+        (logging.CRITICAL, "ERROR"),
     ]:
         record = logging.LogRecord(
             name="test", level=level, pathname="test.py",

@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-log = logging.getLogger(__name__)
+from argenta_logging import get_logger
+
+log = get_logger(__name__)
 
 
 class VerificationMode(StrEnum):

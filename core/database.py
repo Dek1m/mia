@@ -62,7 +62,10 @@ class Database(IDatabase):
             return result
         except Exception as e:
             database_operations_total.labels(operation=operation, status="error").inc()
-            log.error(f"db_{operation}_error", extra={"error": str(e)})
+            log.error(
+                "db_operation_failed",
+                extra={"operation": operation, "error_type": type(e).__name__, "error": str(e)},
+            )
             raise
         finally:
             database_operation_duration_seconds.labels(operation=operation).observe(

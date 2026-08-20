@@ -7,8 +7,6 @@ services:
         - BUILDKIT_INLINE_CACHE=1
     container_name: mia
     restart: unless-stopped
-    ports:
-      - "8001:8000"
     environment:
       - MIA_DB_HOST=postgres
       - MIA_DB_PORT=5432
@@ -20,7 +18,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "from core.application import Application"]
       interval: 30s
       timeout: 10s
       retries: 3

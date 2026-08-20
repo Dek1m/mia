@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 from celery import shared_task
@@ -54,13 +55,30 @@ def _on_worker_process_init(**_kwargs: Any) -> None:
     log.info("mia_worker_ready", extra={"pid": os.getpid(), "modules": loaded})
 
 
+def _record_task(module: str, task_type: str, status: str, duration_s: float) -> None:
+    try:
+        from monitoring.metrics import task_completed_total, task_duration_seconds
+
+        task_completed_total.labels(module=module, task_type=task_type, status=status).inc()
+        task_duration_seconds.labels(module=module, task_type=task_type).observe(duration_s)
+    except Exception:
+        pass
+
+
 def mia_run(envelope: dict[str, Any]) -> dict[str, Any]:
     """Тело задачи. Всегда result-dict, без Celery FAILURE."""
     if _box is None or _registry is None:
         log.error("mia_run_not_ready", extra={"pid": os.getpid()})
         return TaskResult.fail(WORKER_NOT_READY, "worker is not ready").to_dict()
+    started = time.monotonic()
+    module = str(envelope.get("module") or "unknown")
+    method = str(envelope.get("method") or "unknown")
+    task_type = str(envelope.get("task_type") or "unknown")
     try:
         request = TaskRequest.from_dict(envelope)
+        module = request.module
+        method = request.method
+        task_type = request.task_type
         log.info(
             "mia_run_start",
             extra={
@@ -81,19 +99,45 @@ def mia_run(envelope: dict[str, Any]) -> dict[str, Any]:
             extra={"task_id": request.id, "task_module": request.module, "task_method": request.method},
         )
         value = target(*args, **kwargs)
-        log.info("mia_run_ok", extra={"task_id": request.id, "task_module": request.module, "task_method": request.method})
+        duration_s = time.monotonic() - started
+        duration_ms = round(duration_s * 1000, 1)
+        extra = {
+            "task_id": request.id,
+            "task_module": request.module,
+            "task_method": request.method,
+            "duration_ms": duration_ms,
+        }
+        if duration_ms > 500:
+            log.warning("mia_run_slow", extra=extra)
+        else:
+            log.info("mia_run_ok", extra=extra)
+        _record_task(module, task_type, "ok", duration_s)
         return TaskResult.ok_enc(encode_result(_box, value)).to_dict()
     except DispatchError as exc:
+        duration_s = time.monotonic() - started
         log.error(
             "mia_run_failed",
-            extra={"code": exc.code, "task_module": envelope.get("module"), "task_method": envelope.get("method")},
+            extra={
+                "code": exc.code,
+                "task_module": module,
+                "task_method": method,
+                "duration_ms": round(duration_s * 1000, 1),
+            },
         )
+        _record_task(module, task_type, "error", duration_s)
         return TaskResult.fail(exc.code, exc.message, type(exc).__name__).to_dict()
     except Exception:
+        duration_s = time.monotonic() - started
         log.error(
             "mia_run_failed",
-            extra={"code": TASK_FAILED, "task_module": envelope.get("module"), "task_method": envelope.get("method")},
+            extra={
+                "code": TASK_FAILED,
+                "task_module": module,
+                "task_method": method,
+                "duration_ms": round(duration_s * 1000, 1),
+            },
         )
+        _record_task(module, task_type, "error", duration_s)
         return TaskResult.fail(TASK_FAILED, "task failed").to_dict()
 
 

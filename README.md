@@ -2,13 +2,13 @@
 
 State Manager с модульной системой. Python >= 3.11.
 
-belle — один процесс, обёртка вокруг `Application()`. `@task` кладётся в Redis (очередь `mia`). Исполняет shaltir worker:
+belle — один процесс, обёртка вокруг `Application()`. `@task` кладётся в Redis (очередь `mia`). Исполняет mia-worker:
 
 ```bash
-SHALTIR_INCLUDE=core.dispatch.tasks SHALTIR_CELERY_QUEUE=mia python -m shaltir worker
+python -m modules.worker
 ```
 
-`Application()` без `dispatcher=` шлёт в shaltir. Для тестов: `MIA_DISPATCH=local` (in-process).
+`Application()` без `dispatcher=` шлёт в Redis-очередь. Для тестов: `MIA_DISPATCH=local` (in-process).
 
 Проект находится в активной разработке (v0.0.0).
 

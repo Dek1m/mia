@@ -39,9 +39,6 @@ pool_max = 10
 default_provider = "openai"
 timeout = 120.0
 
-[rest]
-port = 8000
-
 [apiproxy]
 whitelist = ["auth", "workspace", "llm"]
 method_timeout = 30.0

@@ -241,6 +241,16 @@ def task(
                     last_error = e
                     if attempt < resolved_retry:
                         delay = resolved_retry_delay * (2 ** attempt)
+                        log.warning(
+                            "task_retry",
+                            extra={
+                                "function": fn.__name__,
+                                "attempt": attempt + 1,
+                                "max_retries": resolved_retry,
+                                "wait_ms": round(delay * 1000, 1),
+                                "error_type": type(e).__name__,
+                            },
+                        )
                         time.sleep(delay)
 
             raise last_error  # type: ignore[misc]
@@ -272,6 +282,16 @@ def task(
                     last_error = e
                     if attempt < resolved_retry:
                         delay = resolved_retry_delay * (2 ** attempt)
+                        log.warning(
+                            "task_retry",
+                            extra={
+                                "function": fn.__name__,
+                                "attempt": attempt + 1,
+                                "max_retries": resolved_retry,
+                                "wait_ms": round(delay * 1000, 1),
+                                "error_type": type(e).__name__,
+                            },
+                        )
                         await asyncio.sleep(delay)
 
             raise last_error  # type: ignore[misc]

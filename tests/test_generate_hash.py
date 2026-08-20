@@ -487,7 +487,6 @@ class TestRealModulesHashValidation:
         ("sample", "1.0.0"),
         ("apiproxy", "1.0.0"),
         ("cli", "1.0.0"),
-        ("rest", "1.0.0"),
     ])
     def test_hash_json_valid_and_correct_version(self, module_name, expected_version):
         """hash.json модуля валиден и содержит правильную версию."""
@@ -510,7 +509,7 @@ class TestRealModulesHashValidation:
 
     @pytest.mark.parametrize("module_name", [
         "auth", "db", "llm", "workspace", "notifications", "sample",
-        "apiproxy", "cli", "rest",
+        "apiproxy", "cli",
     ])
     def test_hash_json_verify_module_passes(self, module_name):
         """verify_module для реального модуля проходит (файлы совпадают с хешами)."""

@@ -14,15 +14,14 @@ RUN pip install --no-cache-dir \
     prometheus-client>=0.20.0 \
     "psycopg[binary]>=3.0.0" \
     psycopg_pool \
-    fastapi>=0.100.0 \
-    uvicorn>=0.23.0 \
-    httpx>=0.24.0
+    httpx>=0.24.0 \
+    "celery[redis]>=5.5,<6" \
+    cryptography>=42
 
 RUN pip install --no-cache-dir git+https://github.com/Dek1m/argenta-logging.git
 
 # App code
 COPY . .
 
-EXPOSE 8000
-
-CMD ["python", "-m", "modules.rest.server", "--host", "0.0.0.0", "--port", "8000"]
+# Библиотека. HTTP — belle (main.py). Воркер — python -m modules.worker
+CMD ["python", "-c", "from core.application import Application"]

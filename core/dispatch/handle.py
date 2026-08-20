@@ -9,8 +9,8 @@ from core.dispatch.errors import TASK_FAILED, DispatchError
 from core.dispatch.secret_box import SecretBox
 
 
-class ShaltirResultHandle:
-    """Обёртка AsyncResult. Не логирует plaintext/ciphertext."""
+class TaskResultHandle:
+    """Обёртка Celery AsyncResult. Не логирует plaintext/ciphertext."""
 
     def __init__(
         self,

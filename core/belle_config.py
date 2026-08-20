@@ -94,13 +94,6 @@ class LlmSection:
 
 
 @dataclass(frozen=True)
-class RestSection:
-    """Секция [rest]."""
-
-    port: int = 8000
-
-
-@dataclass(frozen=True)
 class ApiProxySection:
     """Секция [apiproxy]."""
 
@@ -146,7 +139,6 @@ class BelleConfig:
     auth: AuthSection = field(default_factory=AuthSection)
     db: DbSection = field(default_factory=DbSection)
     llm: LlmSection = field(default_factory=LlmSection)
-    rest: RestSection = field(default_factory=RestSection)
     apiproxy: ApiProxySection = field(default_factory=ApiProxySection)
     workspace: WorkspaceSection = field(default_factory=WorkspaceSection)
     log: LogSection = field(default_factory=LogSection)
@@ -180,7 +172,6 @@ class BelleConfig:
             )),
             db=DbSection(**data.get("db", {})),
             llm=LlmSection(**data.get("llm", {})),
-            rest=RestSection(**data.get("rest", {})),
             apiproxy=ApiProxySection(**data.get("apiproxy", {})),
             workspace=WorkspaceSection(**data.get("workspace", {})),
             log=LogSection(**data.get("log", {})),
@@ -281,8 +272,6 @@ class BelleConfig:
             # LLM
             "BELLE_LLM_PROVIDER": ("llm", "default_provider"),
             "BELLE_LLM_TIMEOUT": ("llm", "timeout"),
-            # REST
-            "BELLE_REST_PORT": ("rest", "port"),
             # Log
             "MIA_LOG_LEVEL": ("log", "level"),
             "BELLE_LOG_LEVEL": ("log", "level"),

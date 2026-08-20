@@ -23,16 +23,19 @@ class ArgentaFormatter(logging.Formatter):
     """Форматтер по стандарту Argenta Team.
 
     Формат: [ISO8601-UTC] [LEVEL] [service] message {"key": "value"}
+    WARNING → WARN, CRITICAL → ERROR — как в argenta-logging.
     """
+
+    _LEVEL_MAP = {"WARNING": "WARN", "CRITICAL": "ERROR"}
 
     def __init__(self, service: str = "mia") -> None:
         super().__init__()
         self._service = service
 
     def format(self, record: logging.LogRecord) -> str:
-        level = record.levelname
+        level = self._LEVEL_MAP.get(record.levelname, record.levelname)
         dt = datetime.fromtimestamp(record.created, tz=timezone.utc)
-        timestamp = dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond:06d}Z"
+        timestamp = dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
         message = record.getMessage()
 
         # Собираем JSON из extra-атрибутов (кроме стандартных logging)

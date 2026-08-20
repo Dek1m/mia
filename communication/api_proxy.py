@@ -23,21 +23,26 @@ class ApiMethodProxy:
             "method_name": self._method_name,
             "args_len": len(args),
         })
-        api_calls_total.labels(module=self._module_name, method=self._method_name, status="ok").inc()
         start = time.monotonic()
+        status = "error"
         try:
             if getattr(self._method, "_parallel", False) and self._dispatcher is not None:
                 # parallel=True: dispatch через ISmartDispatcher
                 result = self._dispatcher.dispatch_async(self._method, *args, **kwargs)
             else:
                 result = self._method(*args, **kwargs)
+            status = "ok"
             return result
-        except Exception as e:
-            api_calls_total.labels(module=self._module_name, method=self._method_name, status="error").inc()
+        except Exception:
             raise
         finally:
             duration = time.monotonic() - start
-            api_duration_seconds.labels(module=self._module_name, method=self._method_name).observe(duration)
+            api_calls_total.labels(
+                module=self._module_name, method=self._method_name, status=status,
+            ).inc()
+            api_duration_seconds.labels(
+                module=self._module_name, method=self._method_name,
+            ).observe(duration)
 
 
 class ModuleApiProxy:
