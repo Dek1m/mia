@@ -43,6 +43,13 @@ _ENV_TO_DOTPATH: dict[str, str] = {
     "MIA_MODULES_DIR": "modules.dir",
     "MIA_CACHE_BACKEND": "storage.cache.backend",
     "MIA_MODULE_VERIFICATION": "modules.verification.mode",
+    "MIA_WORKER_REDIS_HOST": "worker.redis_host",
+    "MIA_WORKER_REDIS_PORT": "worker.redis_port",
+    "MIA_WORKER_BROKER_DB": "worker.broker_db",
+    "MIA_WORKER_BACKEND_DB": "worker.backend_db",
+    "MIA_WORKER_QUEUE": "worker.queue",
+    "MIA_WORKER_CONCURRENCY": "worker.concurrency",
+    "MIA_WORKER_LOG_LEVEL": "worker.log_level",
 }
 
 # Типы значений для приведения из строк ENV
@@ -65,6 +72,10 @@ _NUMERIC_KEYS: set[str] = {
     "resilience.circuit_breaker.failure_threshold",
     "resilience.circuit_breaker.recovery_timeout",
     "resilience.circuit_breaker.success_threshold",
+    "worker.redis_port",
+    "worker.broker_db",
+    "worker.backend_db",
+    "worker.concurrency",
 }
 
 

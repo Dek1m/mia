@@ -1,13 +1,14 @@
-"""Unit-тесты ShaltirDispatcher на моке клиента. Без Redis."""
+"""Unit-тесты QueueDispatcher на моке клиента. Без Redis."""
 from __future__ import annotations
 
 from typing import Any
 
 import pytest
 
+from core.dispatch.codec import MIA_QUEUE, MIA_TASK_NAME
 from core.dispatch.errors import PAYLOAD_FORBIDDEN, PAYLOAD_NOT_SERIALIZABLE, DispatchError
 from core.dispatch.secret_box import SecretBox
-from core.dispatch.shaltir import MIA_QUEUE, MIA_TASK_NAME, ShaltirDispatcher
+from modules.worker.dispatcher import QueueDispatcher
 
 
 class _FakeAsyncResult:
@@ -48,7 +49,7 @@ def box() -> SecretBox:
 
 def test_send_encrypts_payload(box: SecretBox) -> None:
     client = _FakeClient()
-    dp = ShaltirDispatcher(client, box)
+    dp = QueueDispatcher(client, box)
 
     def add(a: int, b: int) -> int:
         return a + b
@@ -70,7 +71,7 @@ def test_send_encrypts_payload(box: SecretBox) -> None:
 
 def test_strips_bound_self(box: SecretBox) -> None:
     client = _FakeClient()
-    dp = ShaltirDispatcher(client, box)
+    dp = QueueDispatcher(client, box)
 
     class AuthProvider:
         def login(self, user: str) -> str:
@@ -86,7 +87,7 @@ def test_strips_bound_self(box: SecretBox) -> None:
 
 def test_forbids_application(box: SecretBox) -> None:
     client = _FakeClient()
-    dp = ShaltirDispatcher(client, box)
+    dp = QueueDispatcher(client, box)
 
     class Application:
         pass
@@ -99,20 +100,20 @@ def test_forbids_application(box: SecretBox) -> None:
     assert exc.value.code == PAYLOAD_FORBIDDEN
 
 
-def test_application_default_is_shaltir(monkeypatch: pytest.MonkeyPatch, box: SecretBox) -> None:
+def test_application_default_is_queue(monkeypatch: pytest.MonkeyPatch, box: SecretBox) -> None:
     monkeypatch.delenv("MIA_DISPATCH", raising=False)
     monkeypatch.setenv("MIA_TASK_CRYPTO_KEY", "11" * 32)
     from core.application import Application
     from core.dispatch.local import LocalInvokeDispatcher
-    from core.dispatch.shaltir import ShaltirDispatcher
+    from modules.worker.dispatcher import QueueDispatcher as QD
 
     class _Client:
         def send(self, *args: Any, **kwargs: Any) -> Any:
             raise AssertionError("no send")
 
-    monkeypatch.setattr("shaltir.ShaltirClient", lambda: _Client())
+    monkeypatch.setattr("modules.worker.dispatcher.QueueDispatcher.from_config", lambda: QD(_Client(), box))
     app = Application(modules_dir="modules")
-    assert isinstance(app.smart_dispatcher, ShaltirDispatcher)
+    assert isinstance(app.smart_dispatcher, QD)
     assert not isinstance(app.smart_dispatcher, LocalInvokeDispatcher)
 
 
@@ -127,7 +128,7 @@ def test_application_local_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_not_serializable(box: SecretBox) -> None:
     client = _FakeClient()
-    dp = ShaltirDispatcher(client, box)
+    dp = QueueDispatcher(client, box)
 
     def take(obj: object) -> None:
         return None

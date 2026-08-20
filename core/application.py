@@ -1,4 +1,4 @@
-"""Application — Composition Root. По умолчанию @task уходит в shaltir."""
+"""Application — Composition Root. По умолчанию @task уходит в Redis-очередь."""
 from __future__ import annotations
 
 import os
@@ -28,21 +28,20 @@ log = get_logger(__name__)
 
 
 def _default_dispatcher() -> ISmartDispatcher:
-    """Shaltir, если не MIA_DISPATCH=local и dispatcher не передан."""
+    """Очередь Redis (mia-worker), если не MIA_DISPATCH=local."""
     if os.environ.get("MIA_DISPATCH", "").strip().lower() == "local":
+        log.info("dispatcher_local")
         return LocalInvokeDispatcher()
-    from shaltir import ShaltirClient
+    from modules.worker.dispatcher import QueueDispatcher
 
-    from core.dispatch.secret_box import SecretBox
-    from core.dispatch.shaltir import ShaltirDispatcher
-
-    return ShaltirDispatcher(ShaltirClient(), SecretBox.from_env())
+    log.info("dispatcher_queue")
+    return QueueDispatcher.from_config()
 
 
 class Application:
     """Главный класс Mia — Composition Root.
 
-    По умолчанию ShaltirDispatcher. MIA_DISPATCH=local — in-process.
+    По умолчанию QueueDispatcher (Redis). MIA_DISPATCH=local — in-process.
     Можно передать dispatcher= явно.
     """
 
