@@ -313,3 +313,213 @@ class TestNoDispatcher:
                 loop.run_until_complete(async_compute(5))
             finally:
                 loop.close()
+
+
+# ============================================================
+# Экспорт в MethodRegistry: api=True → _api_meta
+# ============================================================
+
+
+class TestApiExport:
+    """Метаданные `_api_meta`, не вызов."""
+
+    def test_no_api_meta_by_default(self) -> None:
+        @task(type="cpu")
+        def plain(x: int) -> int:
+            return x
+
+        assert not hasattr(plain, "_api_meta")
+
+    def test_api_true_sets_dict(self) -> None:
+        @task(type="cpu", api=True)
+        def exported(x: int) -> int:
+            return x
+
+        assert isinstance(exported._api_meta, dict)
+        assert exported._api_meta["name"] == "exported"
+        assert exported._api_meta["public"] is False
+        assert exported._api_meta["required_permission"] is None
+
+    def test_public_without_api_raises(self) -> None:
+        with pytest.raises(ValueError, match="api=True"):
+            @task(type="cpu", public=True)
+            def forbidden() -> None:
+                pass
+
+    def test_permission_without_api_raises(self) -> None:
+        with pytest.raises(ValueError, match="api=True"):
+            @task(type="cpu", permission="llm:chat")
+            def forbidden() -> None:
+                pass
+
+    def test_api_public_ok(self) -> None:
+        @task(type="cpu", api=True, public=True)
+        def login() -> None:
+            pass
+
+        assert login._api_meta["public"] is True
+
+    def test_args_none_uses_task_args(self) -> None:
+        @task(type="cpu", api=True)
+        def compute(count: int, name: str) -> str:
+            return name
+
+        assert compute._api_meta["args"]["count"] == "int"
+        assert compute._api_meta["args"]["name"] == "str"
+        assert "self" not in compute._api_meta["args"]
+
+    def test_empty_description_uses_docstring(self) -> None:
+        @task(type="cpu", api=True)
+        def documented() -> None:
+            """Справка метода."""
+
+        assert documented._api_meta["description"] == "Справка метода."
+
+    def test_permission_maps_to_required_permission(self) -> None:
+        @task(type="cpu", api=True, permission="llm:chat")
+        def chat() -> None:
+            pass
+
+        assert chat._api_meta["required_permission"] == "llm:chat"
+
+    def test_api_meta_has_exactly_six_keys(self) -> None:
+        @task(type="cpu", api=True)
+        def exported() -> None:
+            pass
+
+        assert set(exported._api_meta) == {
+            "name",
+            "description",
+            "args",
+            "return_type",
+            "public",
+            "required_permission",
+        }
+
+    def test_public_and_permission_together_keeps_both(self) -> None:
+        @task(type="cpu", api=True, public=True, permission="llm:chat")
+        def weird() -> None:
+            pass
+
+        assert weird._api_meta["public"] is True
+        assert weird._api_meta["required_permission"] == "llm:chat"
+
+    def test_method_inferred_args_omit_self(self) -> None:
+        class Box:
+            @task(type="cpu", api=True)
+            def compute(self, count: int, name: str) -> str:
+                return name
+
+        assert Box.compute._api_meta["args"] == {"count": "int", "name": "str"}
+        assert "self" not in Box.compute._api_meta["args"]
+
+    def test_explicit_description_overrides_docstring(self) -> None:
+        @task(type="cpu", api=True, description="Явное")
+        def documented() -> None:
+            """Докстринг."""
+
+        assert documented._api_meta["description"] == "Явное"
+
+    def test_missing_docstring_gives_empty_description(self) -> None:
+        @task(type="cpu", api=True)
+        def undocumented() -> None:
+            pass
+
+        assert undocumented._api_meta["description"] == ""
+
+    def test_explicit_args_override_inferred(self) -> None:
+        @task(type="cpu", api=True, args={"x": "number"})
+        def compute(x: int) -> int:
+            return x
+
+        assert compute._api_meta["args"] == {"x": "number"}
+
+    def test_empty_args_dict_is_not_inferred(self) -> None:
+        @task(type="cpu", api=True, args={})
+        def compute(x: int) -> int:
+            return x
+
+        assert compute._api_meta["args"] == {}
+
+    def test_explicit_name_overrides_function_name(self) -> None:
+        @task(type="cpu", api=True, name="login")
+        def do_login() -> None:
+            pass
+
+        assert do_login._api_meta["name"] == "login"
+
+    def test_explicit_return_type_overrides_inferred(self) -> None:
+        @task(type="cpu", api=True, return_type="object")
+        def compute(x: int) -> int:
+            return x
+
+        assert compute._api_meta["return_type"] == "object"
+
+    def test_missing_return_annotation_is_none(self) -> None:
+        @task(type="cpu", api=True)
+        def compute(x: int):
+            return x
+
+        assert compute._api_meta["return_type"] is None
+
+    def test_generic_annotation_keeps_type_parameters(self) -> None:
+        @task(type="cpu", api=True)
+        def compute(items: list[int]) -> dict[str, str]:
+            return {}
+
+        assert compute._api_meta["args"]["items"] == "list[int]"
+        assert compute._api_meta["return_type"] == "dict[str, str]"
+
+    def test_union_annotation_stringify(self) -> None:
+        @task(type="cpu", api=True)
+        def compute(name: str | None) -> str | None:
+            return name
+
+        assert compute._api_meta["args"]["name"] == "str | None"
+        assert compute._api_meta["return_type"] == "str | None"
+
+    def test_extract_annotations_false_leaves_args_empty(self) -> None:
+        @task(type="cpu", api=True, extract_annotations=False)
+        def compute(x: int) -> int:
+            return x
+
+        assert compute._api_meta["args"] == {}
+        assert compute._api_meta["return_type"] is None
+
+    def test_bound_method_exposes_api_meta(self) -> None:
+        class Box:
+            @task(type="cpu", api=True)
+            def login(self) -> None:
+                pass
+
+        meta = getattr(Box().login, "_api_meta")
+        assert meta["name"] == "login"
+
+
+class TestApiExportInvariants:
+    """Инварианты миграции: старый auth_method ушёл, sample @api_method жив."""
+
+    def test_auth_decorators_py_removed(self) -> None:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        assert not (root / "modules" / "auth" / "decorators.py").exists()
+
+    def test_no_legacy_auth_method_in_production_sources(self) -> None:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[1]
+        needle = "_".join(("auth", "method"))
+        extra = "_".join(("_auth", "method_meta"))
+        hits: list[str] = []
+        for folder in ("modules", "core", "communication", "modules_system"):
+            base = root / folder
+            if not base.is_dir():
+                continue
+            for path in base.rglob("*.py"):
+                if "__pycache__" in path.parts or "tests" in path.parts:
+                    continue
+                text = path.read_text(encoding="utf-8")
+                if needle in text or extra in text:
+                    hits.append(str(path.relative_to(root)))
+        assert hits == []

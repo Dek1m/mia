@@ -246,29 +246,25 @@ class TestWriteLock:
 class TestApiProxyDispatch:
     """Проверка: apiproxy.call/list_api корректно диспатчатся через @task."""
 
-    def test_list_api_is_sync_task(self) -> None:
-        """list_api — sync @task, должен иметь _task_type."""
+    def test_list_api_has_no_task_type(self) -> None:
+        """list_api без @task — нет _task_type."""
         from modules.apiproxy.provider import ApiProxyProvider
         from modules.apiproxy.config import ApiproxyConfig
 
         config = ApiproxyConfig(whitelist=["auth"])
         proxy = ApiProxyProvider(config=config)
 
-        # list_api — sync функция с @task
-        assert hasattr(proxy.list_api, "_task_type")
-        assert proxy.list_api._task_type == TaskType("cpu")
+        assert not hasattr(proxy.list_api, "_task_type")
 
-    def test_call_is_async_task(self) -> None:
-        """call — async @task, должен иметь _task_type."""
+    def test_call_has_no_task_type(self) -> None:
+        """call без @task — нет _task_type."""
         from modules.apiproxy.provider import ApiProxyProvider
         from modules.apiproxy.config import ApiproxyConfig
 
         config = ApiproxyConfig(whitelist=["auth"])
         proxy = ApiProxyProvider(config=config)
 
-        # call — async функция с @task
-        assert hasattr(proxy.call, "_task_type")
-        assert proxy.call._task_type == TaskType("cpu")
+        assert not hasattr(proxy.call, "_task_type")
 
     def test_call_method_actually_calls_module(self) -> None:
         """apiproxy.call реально вызывает методы модулей."""
@@ -306,9 +302,7 @@ class TestApiProxyDispatch:
         config = ApiproxyConfig(whitelist=["auth"])
         proxy = ApiProxyProvider(config=config)
 
-        # list_api — sync, вызываем напрямую
-        future = proxy.list_api()
-        methods = future.result()
+        methods = proxy.list_api()
         assert isinstance(methods, list)
 
 

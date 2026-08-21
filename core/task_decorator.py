@@ -93,6 +93,20 @@ class ResultHandle(Protocol):
     def exception(self, timeout: float | None = None) -> BaseException | None: ...
 
 
+def _stringify_annotation(annotation: Any) -> str:
+    """Строковое представление аннотации для `_api_meta`.
+
+    `__name__` у GenericAlias/Optional — только origin (`list`, `Optional`),
+    параметры теряются. Если есть ``__args__`` — берём полный ``str()``.
+    """
+    if getattr(annotation, "__args__", None) is not None:
+        return str(annotation).replace("typing.", "")
+    name = getattr(annotation, "__name__", None)
+    if isinstance(name, str):
+        return name
+    return str(annotation).replace("typing.", "")
+
+
 class TaskFuture:
     """Обёртка над handle с доступом к UUID задачи.
 
@@ -161,6 +175,13 @@ def task(
     audit: bool = False,
     metrics: str | None = None,
     extract_annotations: bool = True,
+    api: bool = False,
+    public: bool = False,
+    permission: str | None = None,
+    name: str | None = None,
+    description: str = "",
+    args: dict[str, str] | None = None,
+    return_type: str | None = None,
 ) -> Callable[[F], F]:
     """Декоратор для оборачивания функции в задачу Universal Task System.
 
@@ -179,8 +200,18 @@ def task(
         validate: Pydantic модель для валидации аргументов
         audit: Включить аудит-логирование
         metrics: Имя метрики для Prometheus
-        extract_angles: Извлекать type hints функции в _task_args/_task_return
+        extract_annotations: Извлекать type hints функции в _task_args/_task_return
+        api: Экспорт в MethodRegistry (`_api_meta`). Не влияет на dispatch
+        public: Доступ без авторизации (только при api=True)
+        permission: Требуемое право → required_permission (только при api=True)
+        name: Имя метода в API (по умолчанию __name__)
+        description: Описание; пустое → docstring или ""
+        args: {имя: тип}; None → stringify из _task_args без self
+        return_type: Тип возврата; None → stringify _task_return
     """
+    if not api and (public or permission is not None):
+        raise ValueError("public= and permission= require api=True")
+
     task_type = TaskType(type)
 
     # Резолвим None-значения из конфига
@@ -213,6 +244,32 @@ def task(
         else:
             fn._task_args = {}  # type: ignore[attr-defined]
             fn._task_return = None  # type: ignore[attr-defined]
+
+        # _api_meta до wrap — functools.wraps копирует __dict__
+        if api:
+            task_args = getattr(fn, "_task_args", {}) or {}
+            resolved_args = args if args is not None else {
+                k: _stringify_annotation(v)
+                for k, v in task_args.items()
+                if k != "self"
+            }
+            task_return = getattr(fn, "_task_return", None)
+            fn._api_meta = {  # type: ignore[attr-defined]
+                "name": name or fn.__name__,
+                "description": description or (fn.__doc__ or "").strip(),
+                "args": resolved_args,
+                "return_type": (
+                    return_type
+                    if return_type is not None
+                    else (
+                        _stringify_annotation(task_return)
+                        if task_return is not None
+                        else None
+                    )
+                ),
+                "public": public,
+                "required_permission": permission,
+            }
 
         if asyncio.iscoroutinefunction(fn):
             return _wrap_async(fn)  # type: ignore[return-value]
