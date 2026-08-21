@@ -37,7 +37,12 @@ def _on_worker_process_init(**_kwargs: Any) -> None:
         if m.strip()
     ]
     log.info("worker_loading_modules", extra={"allowed": allowed})
-    app = Application(dispatcher=LocalInvokeDispatcher(), allowed_modules=allowed)
+    modules_dir = os.environ.get("BELLE_MODULES_DIR") or os.environ.get("MIA_MODULES_DIR")
+    app = Application(
+        dispatcher=LocalInvokeDispatcher(),
+        allowed_modules=allowed,
+        modules_dir=modules_dir,
+    )
     app.load_all_modules()
     loaded = app.modules.list_all()
     log.info("worker_modules_loaded", extra={"modules": loaded, "count": len(loaded)})
