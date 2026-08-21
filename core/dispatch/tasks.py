@@ -133,7 +133,7 @@ def mia_run(envelope: dict[str, Any]) -> dict[str, Any]:
         return TaskResult.fail(exc.code, exc.message, type(exc).__name__).to_dict()
     except Exception:
         duration_s = time.monotonic() - started
-        log.error(
+        log.exception(
             "mia_run_failed",
             extra={
                 "code": TASK_FAILED,

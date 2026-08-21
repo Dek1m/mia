@@ -13,7 +13,9 @@ MIA_QUEUE = "mia"
 
 def encode_result(box: SecretBox, value: Any) -> str:
     """Зашифровать результат. Не логировать содержимое."""
-    return box.encrypt(json.dumps(value, separators=(",", ":")).encode("utf-8"))
+    return box.encrypt(
+        json.dumps(value, separators=(",", ":"), default=str).encode("utf-8"),
+    )
 
 
 def decode_payload(box: SecretBox, payload_enc: str) -> dict[str, Any]:
