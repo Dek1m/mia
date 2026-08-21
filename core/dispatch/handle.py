@@ -55,7 +55,9 @@ class TaskResultHandle:
         try:
             raw = self._async_result.get(timeout=wait)
         except Exception as exc:
-            self._error = DispatchError(TASK_FAILED, str(exc))
+            # Сохраняем оригинальное сообщение для диагностики
+            original = str(exc)
+            self._error = DispatchError(TASK_FAILED, f"Protocol error: {original}")
             self._consumed = True
             return
         self._unpack(raw)
