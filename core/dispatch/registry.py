@@ -53,14 +53,25 @@ def adapt_target(attr: Any, name: str) -> Callable[..., Any]:
     raw = inspect.unwrap(attr)
     if inspect.iscoroutinefunction(raw):
         def async_call(*args: Any, **kwargs: Any) -> Any:
-            return run_async_sync(raw, (instance, *args), kwargs)
+            return run_async_sync(raw, (instance, *args), _bind_kwargs(raw, kwargs))
 
         return async_call
 
     def sync_call(*args: Any, **kwargs: Any) -> Any:
-        return raw(instance, *args, **kwargs)
+        return raw(instance, *args, **_bind_kwargs(raw, kwargs))
 
     return sync_call
+
+
+def _bind_kwargs(fn: Callable[..., Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Лишние ключи payload (например _session_user_id на login) не роняют вызов."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return kwargs
+    if any(item.kind == inspect.Parameter.VAR_KEYWORD for item in params.values()):
+        return kwargs
+    return {key: value for key, value in kwargs.items() if key in params}
 
 
 def _is_registerable_name(name: str) -> bool:
