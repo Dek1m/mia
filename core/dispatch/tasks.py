@@ -131,19 +131,21 @@ def mia_run(envelope: dict[str, Any]) -> dict[str, Any]:
         )
         _record_task(module, task_type, "error", duration_s)
         return TaskResult.fail(exc.code, exc.message, type(exc).__name__).to_dict()
-    except Exception:
+    except Exception as exc:
         duration_s = time.monotonic() - started
+        code = getattr(exc, "code", TASK_FAILED)
+        message = str(exc) or "task failed"
         log.exception(
             "mia_run_failed",
             extra={
-                "code": TASK_FAILED,
+                "code": code,
                 "task_module": module,
                 "task_method": method,
                 "duration_ms": round(duration_s * 1000, 1),
             },
         )
         _record_task(module, task_type, "error", duration_s)
-        return TaskResult.fail(TASK_FAILED, "task failed").to_dict()
+        return TaskResult.fail(code, message, type(exc).__name__).to_dict()
 
 
 # Регистрация имени mia.run на celery app. mia_run остаётся обычной функцией.
