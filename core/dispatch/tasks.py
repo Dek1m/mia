@@ -33,7 +33,7 @@ def _on_worker_process_init(**_kwargs: Any) -> None:
     _box = SecretBox.from_env()
     allowed = [
         m.strip()
-        for m in os.environ.get("MIA_WORKER_MODULES", "db,auth").split(",")
+        for m in os.environ.get("MIA_WORKER_MODULES", "db,auth,workspace").split(",")
         if m.strip()
     ]
     log.info("worker_loading_modules", extra={"allowed": allowed})
