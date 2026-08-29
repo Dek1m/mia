@@ -67,7 +67,6 @@ def test_metrics_server_start():
 def test_metrics_server_creation():
     server = MetricsServer(port=19091)
     assert server._port == 19091
-    assert server._thread is None
 
 
 def test_all_metrics_exist():

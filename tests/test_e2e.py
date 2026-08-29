@@ -25,16 +25,12 @@ import pytest
 import modules.auth.jwt
 from modules.auth.provider import (
     AuthProvider,
-    UserContext,
     InvalidCredentialsError,
     AccountLockedError,
-    ReuseDetectedError,
-    ForbiddenError,
-    NotFoundError,
 )
 from modules.auth.config import AuthConfig
-from modules.auth.tests.conftest import MockPool, MockRow
-from modules.apiproxy.registry import MethodRegistry, MethodMeta
+from modules.auth.tests.conftest import MockPool
+from modules.apiproxy.registry import MethodRegistry
 from modules.apiproxy.provider import ApiProxyProvider
 from modules.apiproxy.middleware import AuthMiddleware, AuthorizedCall
 from modules.apiproxy.converter import call_method, ApiError

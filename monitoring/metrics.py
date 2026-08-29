@@ -4,7 +4,6 @@
 
 Префиксы:
   - api_        — API Proxy
-  - dispatcher_ — диспетчер задач
   - cache_      — CacheHierarchy
   - database_   — Database
   - task_       — Universal Task System
@@ -13,7 +12,6 @@ from __future__ import annotations
 
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
 from argenta_logging import get_logger
-import threading
 
 log = get_logger(__name__)
 
@@ -66,17 +64,6 @@ database_cache_misses_total = Counter(
 
 
 # ============================================================
-# Dispatcher — маршрутизация задач
-# ============================================================
-
-dispatcher_dispatch_total = Counter(
-    "dispatcher_dispatch_total",
-    "Total dispatched tasks",
-    ["pool", "db_type"],
-)
-
-
-# ============================================================
 # Universal Task System — метрики задач
 # ============================================================
 
@@ -99,8 +86,6 @@ task_duration_seconds = Histogram(
     buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0),
 )
 
-
-# ============================================================
 
 # ============================================================
 # Cache Hierarchy — многоуровневый кеш
@@ -132,7 +117,6 @@ class MetricsServer:
 
     def __init__(self, port: int = 9090) -> None:
         self._port = port
-        self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         """Запустить сервер в отдельном потоке."""
