@@ -111,18 +111,18 @@ class TestMultipleModules:
         state.startup()
 
         state.load_module("sample")
-        state.load_module("notifications")
+        state.load_module("log")
 
         assert len(state.modules.list_all()) == 2
         assert "sample" in state.modules.list_all()
-        assert "notifications" in state.modules.list_all()
+        assert "log" in state.modules.list_all()
 
         # API sample работает
         assert state.api.sample.add(1, 1) == 2
 
         # Выгрузка обоих
         state.unload_module("sample")
-        state.unload_module("notifications")
+        state.unload_module("log")
         assert len(state.modules.list_all()) == 0
 
         state.shutdown()

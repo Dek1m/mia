@@ -483,7 +483,6 @@ class TestRealModulesHashValidation:
         ("db", "1.0.0"),
         ("llm", "1.0.0"),
         ("workspace", "1.0.0"),
-        ("notifications", "0.0.0"),
         ("sample", "1.0.0"),
         ("apiproxy", "1.0.0"),
         ("cli", "1.0.0"),
@@ -508,7 +507,7 @@ class TestRealModulesHashValidation:
         assert len(manifest.manifest_hash) == 64
 
     @pytest.mark.parametrize("module_name", [
-        "auth", "db", "llm", "workspace", "notifications", "sample",
+        "auth", "db", "llm", "workspace", "sample",
         "apiproxy", "cli",
     ])
     def test_hash_json_verify_module_passes(self, module_name):
