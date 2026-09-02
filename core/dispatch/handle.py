@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+import time
+from typing import Any, Callable
 
 from argenta_logging import get_logger
 
@@ -13,6 +14,7 @@ from core.dispatch.secret_box import SecretBox
 log = get_logger(__name__)
 
 _REDIS_PROTOCOL_TYPES = frozenset({"ProtocolError", "InvalidResponse"})
+_POLL_INTERVAL = 0.05
 
 
 class TaskResultHandle:
@@ -70,11 +72,24 @@ class TaskResultHandle:
         self._consumed = True
 
     def _get_raw(self, wait: float | None) -> Any:
-        # redis-py Connection не thread-safe: get() сериализуем тем же lock, что send_task
         if self._lock is None:
             return self._async_result.get(timeout=wait)
+        deadline = None if wait is None else time.monotonic() + wait
+        while True:
+            if self._redis(self._async_result.ready):
+                return self._redis(self._async_result.get, timeout=0)
+            if deadline is None:
+                time.sleep(_POLL_INTERVAL)
+                continue
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return self._redis(self._async_result.get, timeout=0)
+            time.sleep(min(_POLL_INTERVAL, remaining))
+
+    def _redis(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        # redis-py Connection не thread-safe: lock только на round-trip, wait — снаружи
         with self._lock:
-            return self._async_result.get(timeout=wait)
+            return fn(*args, **kwargs)
 
     def _unpack(self, raw: Any) -> None:
         if not isinstance(raw, dict):

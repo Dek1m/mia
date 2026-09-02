@@ -82,5 +82,50 @@ def test_get_uses_lock(box: SecretBox) -> None:
     handle = TaskResultHandle(result, box, lock=lock)
     with pytest.raises(DispatchError):
         handle.result()
-    assert lock.entered == 1
+    assert lock.entered == 2
     assert result.get_calls == 1
+
+
+def test_lock_released_between_polls(box: SecretBox, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("core.dispatch.handle.time.sleep", lambda _s: None)
+    events: list[str] = []
+
+    class _Lock:
+        def __enter__(self) -> _Lock:
+            events.append("lock")
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            events.append("unlock")
+
+    class _Delayed:
+        def __init__(self) -> None:
+            self.ready_n = 0
+            self.get_timeouts: list[float | None] = []
+
+        def ready(self) -> bool:
+            events.append("ready")
+            self.ready_n += 1
+            return self.ready_n >= 2
+
+        def get(self, timeout: float | None = None) -> Any:
+            events.append("get")
+            self.get_timeouts.append(timeout)
+            return {"ok": True, "result_enc": "x"}
+
+    delayed = _Delayed()
+    handle = TaskResultHandle(delayed, box, timeout=5.0, lock=_Lock())
+    with pytest.raises(DispatchError):
+        handle.result()
+    assert events == [
+        "lock",
+        "ready",
+        "unlock",
+        "lock",
+        "ready",
+        "unlock",
+        "lock",
+        "get",
+        "unlock",
+    ]
+    assert delayed.get_timeouts == [0]
