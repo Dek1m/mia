@@ -4,9 +4,15 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from argenta_logging import get_logger
+
 from core.dispatch.envelope import TaskResult
-from core.dispatch.errors import TASK_FAILED, DispatchError
+from core.dispatch.errors import REDIS_PROTOCOL, TASK_FAILED, DispatchError
 from core.dispatch.secret_box import SecretBox
+
+log = get_logger(__name__)
+
+_REDIS_PROTOCOL_TYPES = frozenset({"ProtocolError", "InvalidResponse"})
 
 
 class TaskResultHandle:
@@ -17,10 +23,12 @@ class TaskResultHandle:
         async_result: Any,
         box: SecretBox,
         timeout: float | None = None,
+        lock: Any = None,
     ) -> None:
         self._async_result = async_result
         self._box = box
         self._timeout = timeout
+        self._lock = lock
         self._value: Any = None
         self._error: BaseException | None = None
         self._consumed = False
@@ -53,15 +61,20 @@ class TaskResultHandle:
             return
         wait = self._timeout if timeout is None else timeout
         try:
-            raw = self._async_result.get(timeout=wait)
+            raw = self._get_raw(wait)
         except Exception as exc:
-            # Сохраняем оригинальное сообщение для диагностики
-            original = str(exc)
-            self._error = DispatchError(TASK_FAILED, f"Protocol error: {original}")
+            self._error = _dispatch_from_transport(exc)
             self._consumed = True
             return
         self._unpack(raw)
         self._consumed = True
+
+    def _get_raw(self, wait: float | None) -> Any:
+        # redis-py Connection не thread-safe: get() сериализуем тем же lock, что send_task
+        if self._lock is None:
+            return self._async_result.get(timeout=wait)
+        with self._lock:
+            return self._async_result.get(timeout=wait)
 
     def _unpack(self, raw: Any) -> None:
         if not isinstance(raw, dict):
@@ -82,4 +95,33 @@ class TaskResultHandle:
         except DispatchError as exc:
             self._error = exc
         except Exception as exc:
-            self._error = DispatchError(TASK_FAILED, str(exc))
+            self._error = DispatchError(TASK_FAILED, f"{type(exc).__name__}: {exc}")
+
+
+def _is_redis_protocol(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if type(current).__name__ in _REDIS_PROTOCOL_TYPES:
+            return True
+        if "Protocol Error" in str(current):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
+def _dispatch_from_transport(exc: BaseException) -> DispatchError:
+    error_type = type(exc).__name__
+    error_message = str(exc)
+    code = REDIS_PROTOCOL if _is_redis_protocol(exc) else TASK_FAILED
+    message = error_message if code == REDIS_PROTOCOL else f"{error_type}: {error_message}"
+    log.error(
+        "task_result_failed",
+        extra={
+            "error_type": error_type,
+            "error_message": error_message,
+            "code": code,
+        },
+    )
+    return DispatchError(code, message)

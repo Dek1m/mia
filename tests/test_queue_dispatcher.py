@@ -1,6 +1,8 @@
 """Unit-тесты QueueDispatcher на моке клиента. Без Redis."""
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
 import pytest
@@ -136,3 +138,58 @@ def test_not_serializable(box: SecretBox) -> None:
     with pytest.raises(DispatchError) as exc:
         dp.dispatch_async(take, object())
     assert exc.value.code == PAYLOAD_NOT_SERIALIZABLE
+
+
+def test_send_and_get_share_rlock(box: SecretBox) -> None:
+    dp = QueueDispatcher(_FakeClient(), box)
+
+    def ping() -> None:
+        return None
+
+    handle = dp.dispatch_async(ping)
+    assert dp._write_lock is handle._lock
+    assert type(dp._write_lock).__name__ == "RLock"
+
+
+def test_send_serializes_parallel_calls(box: SecretBox) -> None:
+    class _SlowClient:
+        def __init__(self) -> None:
+            self.inside = 0
+            self.max_inside = 0
+            self._guard = threading.Lock()
+
+        def send(self, *args: Any, **kwargs: Any) -> _FakeAsyncResult:
+            with self._guard:
+                self.inside += 1
+                self.max_inside = max(self.max_inside, self.inside)
+            time.sleep(0.05)
+            with self._guard:
+                self.inside -= 1
+            return _FakeAsyncResult("tid")
+
+    client = _SlowClient()
+    dp = QueueDispatcher(client, box)
+
+    def ping() -> None:
+        return None
+
+    threads = [threading.Thread(target=lambda: dp.dispatch_async(ping)) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert client.max_inside == 1
+
+
+def test_send_failure_propagates(box: SecretBox) -> None:
+    class _Boom:
+        def send(self, *args: Any, **kwargs: Any) -> Any:
+            raise RuntimeError("redis down")
+
+    dp = QueueDispatcher(_Boom(), box)
+
+    def ping() -> None:
+        return None
+
+    with pytest.raises(RuntimeError, match="redis down"):
+        dp.dispatch_async(ping)
