@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from modules_system.module_base import ModuleMeta
+from modules_system.module_base import ModuleMeta, should_load
 from modules_system.module_manager import ModuleManager
 from modules_system.verification import VerificationMode
 
@@ -295,6 +295,48 @@ class TestReadMeta:
         assert meta.dependencies == ["db", "auth", "cache"]
         assert meta.timeout_defaults == {"chat": 120.0}
 
+    def test_read_meta_load_on_and_flags(self, tmp_path):
+        """AST парсит load_on, is_system, is_example, display_name (str/bool)."""
+        content = (
+            'from modules_system.module_base import ModuleBase, ModuleMeta\n\n'
+            'class TestModule(ModuleBase):\n'
+            '    @property\n'
+            '    def name(self) -> str:\n'
+            '        return "apiproxy"\n'
+            '    @property\n'
+            '    def meta(self) -> ModuleMeta:\n'
+            '        return ModuleMeta(\n'
+            '            dependencies=["auth"],\n'
+            '            load_on="api",\n'
+            '            is_system=True,\n'
+            '            is_example=False,\n'
+            '            display_name="API Proxy",\n'
+            '        )\n'
+        )
+        _create_module(tmp_path, "apiproxy", content=content)
+        mgr = ModuleManager(str(tmp_path), verification_mode=VerificationMode.DISABLED)
+
+        meta = mgr._read_meta("apiproxy")
+
+        assert meta.dependencies == ["auth"]
+        assert meta.load_on == "api"
+        assert meta.is_system is True
+        assert meta.is_example is False
+        assert meta.display_name == "API Proxy"
+
+    def test_read_meta_new_fields_defaults(self, tmp_path):
+        """Старый ModuleMeta(dependencies=...) получает дефолты новых полей."""
+        _create_module(tmp_path, "mod_a", dependencies=["db"])
+        mgr = ModuleManager(str(tmp_path), verification_mode=VerificationMode.DISABLED)
+
+        meta = mgr._read_meta("mod_a")
+
+        assert meta.dependencies == ["db"]
+        assert meta.load_on == "all"
+        assert meta.is_system is False
+        assert meta.is_example is False
+        assert meta.display_name == ""
+
 
 # ── Тесты _topological_sort ────────────────────────────────────────
 
@@ -368,6 +410,14 @@ class TestModuleMetaDependencies:
         assert meta.dependencies == ["db"]
         assert meta.permissions == {"login": "auth.login"}
 
+    def test_default_discovery_fields(self):
+        """Новые поля ADR-005: all / False / пустой display_name."""
+        meta = ModuleMeta()
+        assert meta.load_on == "all"
+        assert meta.is_system is False
+        assert meta.is_example is False
+        assert meta.display_name == ""
+
 
 # ── Интеграционные тесты ──────────────────────────────────────────
 
@@ -429,3 +479,39 @@ class TestTopologicalIntegration:
         # apiproxy после auth и workspace
         assert load_order.index("apiproxy") > load_order.index("auth")
         assert load_order.index("apiproxy") > load_order.index("workspace")
+
+
+# ── Тесты should_load (ADR-005) ────────────────────────────────────
+
+
+class TestShouldLoad:
+    """Фильтр загрузки по роли процесса."""
+
+    def test_example_never_loads(self):
+        """is_example → не грузить ни в api, ни в worker."""
+        meta = ModuleMeta(is_example=True, load_on="all")
+        assert should_load(meta, "api") is False
+        assert should_load(meta, "worker") is False
+
+    def test_load_on_all(self):
+        """load_on=all → грузить в обоих ролях."""
+        meta = ModuleMeta(load_on="all")
+        assert should_load(meta, "api") is True
+        assert should_load(meta, "worker") is True
+
+    def test_load_on_api(self):
+        """load_on=api → только belle REST."""
+        meta = ModuleMeta(load_on="api")
+        assert should_load(meta, "api") is True
+        assert should_load(meta, "worker") is False
+
+    def test_load_on_worker(self):
+        """load_on=worker → только celery child."""
+        meta = ModuleMeta(load_on="worker")
+        assert should_load(meta, "api") is False
+        assert should_load(meta, "worker") is True
+
+    def test_example_wins_over_role(self):
+        """is_example важнее совпадения load_on с role."""
+        meta = ModuleMeta(load_on="api", is_example=True)
+        assert should_load(meta, "api") is False

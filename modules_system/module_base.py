@@ -21,6 +21,10 @@ class ModuleMeta:
     - lock_rules: шаблоны блокировок (например, по пользователю)
     - timeout_defaults: таймауты по умолчанию для методов
     - dependencies: список модулей, от которых зависит данный модуль
+    - load_on: в каком процессе грузить (api | worker | all)
+    - is_system: ядро, unload запрещён
+    - display_name: человекочитаемое имя в UI
+    - is_example: пример/демо, не грузить в belle/worker/migrate
     """
 
     permissions: dict[str, str] = field(default_factory=dict)
@@ -28,6 +32,27 @@ class ModuleMeta:
     lock_rules: dict[str, str] = field(default_factory=dict)
     timeout_defaults: dict[str, float] = field(default_factory=dict)
     dependencies: list[str] = field(default_factory=list)
+    load_on: str = "all"  # api | worker | all
+    is_system: bool = False
+    display_name: str = ""
+    is_example: bool = False
+
+
+def should_load(meta: ModuleMeta, role: str) -> bool:
+    """Нужно ли грузить модуль в процессе с данной ролью (ADR-005).
+
+    Args:
+        meta: Метаданные модуля.
+        role: Роль процесса — ``api`` (belle REST) или ``worker``.
+
+    Returns:
+        False для example; True если load_on == all или совпадает с role.
+    """
+    if meta.is_example:
+        return False
+    if meta.load_on == "all":
+        return True
+    return meta.load_on == role
 
 
 def api_method(fn: Callable | None = None, *, parallel: bool = False) -> Callable:
