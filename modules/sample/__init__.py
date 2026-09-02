@@ -15,7 +15,12 @@ class SampleModule(ModuleBase):
     
     @property
     def meta(self) -> ModuleMeta:
-        return ModuleMeta()
+        return ModuleMeta(
+            load_on="all",
+            is_system=False,
+            display_name="Sample",
+            is_example=True,
+        )
     
     def __init__(self) -> None:
         self._log = None
