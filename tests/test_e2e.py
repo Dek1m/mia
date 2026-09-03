@@ -552,13 +552,13 @@ class TestE2EFullSystemIntegration:
 
 @pytest.mark.asyncio
 class TestE2EApiProxyEdgeCases:
-    """ApiProxy: whitelist, missing method, error handling."""
+    """ApiProxy: missing module/method, error handling."""
 
-    async def test_whitelist_rejects_unknown_module(self, api_proxy):
-        """Module not in whitelist → 403."""
+    async def test_unknown_module_returns_404(self, api_proxy):
+        """Module not in registry → 404, не 403 whitelist."""
         result = await api_proxy.call("unknown_module", "method", {})
         assert result["error"] is not None
-        assert result["error"]["status_code"] == 403
+        assert result["error"]["status_code"] == 404
 
     async def test_missing_method_returns_404(self, api_proxy):
         """Non-existent method → 404."""

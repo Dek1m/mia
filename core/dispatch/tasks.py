@@ -18,32 +18,45 @@ from core.dispatch.codec import decode_payload, encode_result
 
 log = get_logger(__name__)
 
+_WORKER_ROLE = "worker"
 _box: SecretBox | None = None
 _registry: TaskTargetRegistry | None = None
+_runtime_registry: Any | None = None
+
+
+def _worker_service_name() -> str:
+    return os.environ.get("SERVICE_NAME", "").strip() or "belle-worker"
+
+
+def boot_worker_application() -> Any:
+    """Application без фильтра имён, role=worker, снимок Redis."""
+    from core.application import Application
+    from core.dispatch.local import LocalInvokeDispatcher
+    from modules_system.runtime_registry import ModuleRuntimeRegistry
+
+    modules_dir = os.environ.get("BELLE_MODULES_DIR") or os.environ.get("MIA_MODULES_DIR")
+    app = Application(
+        dispatcher=LocalInvokeDispatcher(),
+        modules_dir=modules_dir,
+    )
+    runtime = ModuleRuntimeRegistry.from_env(_worker_service_name())
+    app.set_runtime_registry(runtime)
+    app.load_all_modules(role=_WORKER_ROLE)
+    app.publish_runtime()
+    runtime.start_heartbeat_loop()
+    global _runtime_registry
+    _runtime_registry = runtime
+    return app
 
 
 @worker_process_init.connect
 def _on_worker_process_init(**_kwargs: Any) -> None:
     """SecretBox + Application(LocalInvoke) + реестр методов."""
     global _box, _registry
-    from core.application import Application
-    from core.dispatch.local import LocalInvokeDispatcher
 
     log.info("worker_process_init", extra={"pid": os.getpid()})
     _box = SecretBox.from_env()
-    allowed = [
-        m.strip()
-        for m in os.environ.get("MIA_WORKER_MODULES", "db,auth,workspace").split(",")
-        if m.strip()
-    ]
-    log.info("worker_loading_modules", extra={"allowed": allowed})
-    modules_dir = os.environ.get("BELLE_MODULES_DIR") or os.environ.get("MIA_MODULES_DIR")
-    app = Application(
-        dispatcher=LocalInvokeDispatcher(),
-        allowed_modules=allowed,
-        modules_dir=modules_dir,
-    )
-    app.load_all_modules()
+    app = boot_worker_application()
     loaded = app.modules.list_all()
     log.info("worker_modules_loaded", extra={"modules": loaded, "count": len(loaded)})
     registry = TaskTargetRegistry()
