@@ -52,6 +52,10 @@ class ModuleRegistry(IModuleRegistry):
         """
         return self._manager.discover_and_sort()
 
+    def read_meta(self, name: str) -> Any:
+        """AST ModuleMeta без загрузки модуля."""
+        return self._manager.read_meta(name)
+
     def load(self, name: str, state: Any = None) -> Any:
         with self._lock:
             if name in self._modules:

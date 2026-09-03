@@ -106,6 +106,10 @@ class ModuleManager:
         )
         return sorted_modules
 
+    def read_meta(self, name: str) -> ModuleMeta:
+        """Публичное AST-чтение ModuleMeta без импорта модуля."""
+        return self._read_meta(name)
+
     def _read_meta(self, name: str) -> ModuleMeta:
         """Прочитать ModuleMeta из __init__.py без загрузки модуля.
 
