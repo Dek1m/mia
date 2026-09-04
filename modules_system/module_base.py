@@ -111,6 +111,21 @@ class ModuleBase(ABC):
         """
         return ModuleMeta()
 
+    def settings_schema(self) -> tuple:
+        """Настройки модуля для Preferences. Default — config.SETTINGS."""
+        config = getattr(self, "_config", None)
+        settings = getattr(config, "SETTINGS", ()) if config is not None else ()
+        return tuple(settings)
+
+    def apply_pref(self, field: Any, value: Any) -> None:
+        """Протолкнуть значение в живой конфиг."""
+        from modules_system.pref_spec import apply_to_config
+
+        config = getattr(self, "_config", None)
+        if config is None:
+            return
+        self._config = apply_to_config(config, field, value)
+
     def on_load(self, state: "Application") -> None:  # noqa: F821
         """Загрузка Python: DI, пулы, фасады. Без DDL и seed.
 

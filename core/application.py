@@ -284,6 +284,23 @@ class Application:
         self._collect_apiproxy()
         if rest_last:
             self._load_discovered(_REST_MODULE)
+        self._apply_pref_overlay()
+
+    def _apply_pref_overlay(self) -> None:
+        """system.pref → живые конфиги после полной очереди load."""
+        system = self.modules.get("system")
+        provider = getattr(system, "_provider", None) if system is not None else None
+        repo = getattr(provider, "_repo", None) if provider is not None else None
+        database = getattr(repo, "_database", None) if repo is not None else None
+        if database is None:
+            return
+        try:
+            from modules.system.prefs import apply_stored
+
+            rows = database.fetch("SELECT key, value FROM system.pref") or []
+            apply_stored(self, [dict(row) for row in rows])
+        except Exception as exc:
+            log.warning("pref_overlay_skipped", extra={"error": str(exc)})
 
     def _queue_for_role(self, discovered: list[str], role: str) -> list[str]:
         selected: list[str] = []
