@@ -132,6 +132,10 @@ class ILogger(ABC):
     def error(self, message: str, **kwargs: Any) -> None: ...
 
     @abstractmethod
+    def exception(self, message: str, **kwargs: Any) -> None:
+        """ERROR с traceback текущего исключения (вызывать внутри except)."""
+
+    @abstractmethod
     def debug(self, message: str, **kwargs: Any) -> None: ...
 
     @abstractmethod
