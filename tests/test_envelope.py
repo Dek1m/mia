@@ -34,6 +34,28 @@ def test_request_json_roundtrip() -> None:
     assert restored.to_dict() == req.to_dict()
 
 
+def test_request_without_request_id_is_v1_compatible() -> None:
+    """Старый envelope не меняется: request_id=None не сериализуется."""
+    req = TaskRequest(
+        id="t3", module="db", method="m", task_type="database",
+        timeout=5.0, payload_enc="p",
+    )
+    data = req.to_dict()
+    assert "request_id" not in data
+    assert data["v"] == 1
+    assert TaskRequest.from_dict(data).request_id is None
+
+
+def test_request_id_roundtrip() -> None:
+    req = TaskRequest(
+        id="t4", module="db", method="m", task_type="database",
+        timeout=5.0, payload_enc="p", request_id="rid-42",
+    )
+    restored = TaskRequest.from_json(req.to_json())
+    assert restored.request_id == "rid-42"
+    assert restored.v == 1
+
+
 def test_result_ok_dict() -> None:
     result = TaskResult.ok_enc("cipher")
     data = result.to_dict()

@@ -71,6 +71,37 @@ def test_send_encrypts_payload(box: SecretBox) -> None:
     assert b"1" in payload
 
 
+def test_request_id_from_contextvar_goes_to_envelope_not_payload(box: SecretBox) -> None:
+    from core.dispatch.context import request_id_var
+
+    client = _FakeClient()
+    dp = QueueDispatcher(client, box)
+
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    token = request_id_var.set("rid-7")
+    try:
+        dp.dispatch_async(add, 1, 2)
+    finally:
+        request_id_var.reset(token)
+    envelope = client.calls[0]["args"][0]
+    assert envelope["request_id"] == "rid-7"
+    # request_id — метаданные envelope, в зашифрованный payload метода не течёт
+    assert b"rid-7" not in box.decrypt(envelope["payload_enc"])
+
+
+def test_no_request_id_envelope_has_no_field(box: SecretBox) -> None:
+    client = _FakeClient()
+    dp = QueueDispatcher(client, box)
+
+    def ping() -> None:
+        return None
+
+    dp.dispatch_async(ping)
+    assert "request_id" not in client.calls[0]["args"][0]
+
+
 def test_strips_bound_self(box: SecretBox) -> None:
     client = _FakeClient()
     dp = QueueDispatcher(client, box)

@@ -92,20 +92,23 @@ def mia_run(envelope: dict[str, Any]) -> dict[str, Any]:
     module = str(envelope.get("module") or "unknown")
     method = str(envelope.get("method") or "unknown")
     task_type = str(envelope.get("task_type") or "unknown")
+    # Correlation id из envelope (v=1 опционально) — сквозная трассировка REST → worker
+    request_id = str(envelope.get("request_id") or "") or None
     try:
         request = TaskRequest.from_dict(envelope)
         module = request.module
         method = request.method
         task_type = request.task_type
-        log.info(
-            "mia_run_start",
-            extra={
-                "task_id": request.id,
-                "task_module": request.module,
-                "task_method": request.method,
-                "timeout": request.timeout,
-            },
-        )
+        request_id = request.request_id or request_id
+        start_extra: dict[str, Any] = {
+            "task_id": request.id,
+            "task_module": request.module,
+            "task_method": request.method,
+            "timeout": request.timeout,
+        }
+        if request_id:
+            start_extra["request_id"] = request_id
+        log.info("mia_run_start", extra=start_extra)
         payload = decode_payload(_box, request.payload_enc)
         args = payload.get("args") or []
         kwargs = payload.get("kwargs") or {}
@@ -119,12 +122,14 @@ def mia_run(envelope: dict[str, Any]) -> dict[str, Any]:
         value = target(*args, **kwargs)
         duration_s = time.monotonic() - started
         duration_ms = round(duration_s * 1000, 1)
-        extra = {
+        extra: dict[str, Any] = {
             "task_id": request.id,
             "task_module": request.module,
             "task_method": request.method,
             "duration_ms": duration_ms,
         }
+        if request_id:
+            extra["request_id"] = request_id
         if duration_ms > 500:
             log.warning("mia_run_slow", extra=extra)
         else:
@@ -133,30 +138,36 @@ def mia_run(envelope: dict[str, Any]) -> dict[str, Any]:
         return TaskResult.ok_enc(encode_result(_box, value)).to_dict()
     except DispatchError as exc:
         duration_s = time.monotonic() - started
-        log.error(
-            "mia_run_failed",
-            extra={
-                "code": exc.code,
-                "task_module": module,
-                "task_method": method,
-                "duration_ms": round(duration_s * 1000, 1),
-            },
-        )
+        failed_extra: dict[str, Any] = {
+            "code": exc.code,
+            "task_module": module,
+            "task_method": method,
+            "duration_ms": round(duration_s * 1000, 1),
+        }
+        if request_id:
+            failed_extra["request_id"] = request_id
+        log.error("mia_run_failed", extra=failed_extra)
         _record_task(module, task_type, "error", duration_s)
         return TaskResult.fail(exc.code, exc.message, type(exc).__name__).to_dict()
     except Exception as exc:
         duration_s = time.monotonic() - started
         code = getattr(exc, "code", TASK_FAILED)
-        message = str(exc) or "task failed"
-        log.exception(
-            "mia_run_failed",
-            extra={
-                "code": code,
-                "task_module": module,
-                "task_method": method,
-                "duration_ms": round(duration_s * 1000, 1),
-            },
-        )
+        if code == TASK_FAILED:
+            # Некодируемое исключение: внутренний текст (SQL, traceback-детали)
+            # не должен уходить вызывающему — CLI/REST печатают message как есть.
+            message = "task failed"
+        else:
+            # Кодированная доменная ошибка: human предназначен клиенту
+            message = str(getattr(exc, "human", "") or exc)
+        failed_extra = {
+            "code": code,
+            "task_module": module,
+            "task_method": method,
+            "duration_ms": round(duration_s * 1000, 1),
+        }
+        if request_id:
+            failed_extra["request_id"] = request_id
+        log.exception("mia_run_failed", extra=failed_extra)
         _record_task(module, task_type, "error", duration_s)
         return TaskResult.fail(code, message, type(exc).__name__).to_dict()
 

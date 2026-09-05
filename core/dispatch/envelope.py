@@ -19,9 +19,12 @@ class TaskRequest:
     timeout: float
     payload_enc: str
     v: int = ENVELOPE_VERSION
+    # Correlation id HTTP-запроса (X-Request-Id). Опционален: v=1 совместим —
+    # старые воркеры игнорируют поле, старые продюсеры его не пишут.
+    request_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "v": self.v,
             "id": self.id,
             "module": self.module,
@@ -30,12 +33,16 @@ class TaskRequest:
             "timeout": self.timeout,
             "payload_enc": self.payload_enc,
         }
+        if self.request_id:
+            data["request_id"] = self.request_id
+        return data
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), separators=(",", ":"))
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TaskRequest:
+        raw_request_id = data.get("request_id")
         return cls(
             v=int(data.get("v", ENVELOPE_VERSION)),
             id=str(data["id"]),
@@ -44,6 +51,7 @@ class TaskRequest:
             task_type=str(data["task_type"]),
             timeout=float(data["timeout"]),
             payload_enc=str(data["payload_enc"]),
+            request_id=str(raw_request_id) if raw_request_id else None,
         )
 
     @classmethod

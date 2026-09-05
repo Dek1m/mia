@@ -16,6 +16,7 @@ def _envelope(
     method: str,
     args: list,
     kwargs: dict | None = None,
+    request_id: str | None = None,
 ) -> dict:
     import json as _json
 
@@ -27,6 +28,7 @@ def _envelope(
         task_type="cpu",
         timeout=5.0,
         payload_enc=payload,
+        request_id=request_id,
     ).to_dict()
 
 
@@ -64,6 +66,22 @@ def test_missing_method_is_ok_false() -> None:
     result = mia_tasks.mia_run(_envelope(box, "demo", "nope", []))
     assert result["ok"] is False
     assert result["error"]["code"] == METHOD_NOT_FOUND
+
+
+def test_request_id_logged_in_mia_run_ok(caplog) -> None:
+    import logging
+
+    box = SecretBox(bytes.fromhex("2222222222222222222222222222222222222222222222222222222222222222"))
+    registry = TaskTargetRegistry()
+    registry.register("demo", "add", lambda a, b: a + b)
+    mia_tasks._box = box
+    mia_tasks._registry = registry
+    with caplog.at_level(logging.INFO, logger="core.dispatch.tasks"):
+        result = mia_tasks.mia_run(_envelope(box, "demo", "add", [2, 3], request_id="rid-9"))
+    assert result["ok"] is True
+    logged = [r for r in caplog.records if r.getMessage() in ("mia_run_start", "mia_run_ok")]
+    assert len(logged) == 2
+    assert all(getattr(r, "request_id", None) == "rid-9" for r in logged)
 
 
 def test_task_failed_is_ok_false() -> None:
