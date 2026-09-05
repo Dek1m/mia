@@ -478,17 +478,16 @@ class TestGeneratedHashValidation:
 class TestRealModulesHashValidation:
     """Проверка что hash.json всех 6 модулей валидны."""
 
-    @pytest.mark.parametrize("module_name,expected_version", [
-        ("auth", "2.0.0"),
-        ("db", "1.0.0"),
-        ("llm", "1.0.0"),
-        ("workspace", "1.0.0"),
-        ("sample", "1.0.0"),
-        ("apiproxy", "1.0.0"),
-        ("cli", "1.0.0"),
+    @pytest.mark.parametrize("module_name", [
+        "auth", "db", "llm", "workspace", "sample",
+        "apiproxy", "cli",
     ])
-    def test_hash_json_valid_and_correct_version(self, module_name, expected_version):
-        """hash.json модуля валиден и содержит правильную версию."""
+    def test_hash_json_valid_and_correct_version(self, module_name):
+        """hash.json модуля валиден; версия = MODULE_VERSION из __init__.py.
+
+        Ожидание берётся динамически (_extract_version) — хардкод версий
+        в тесте устаревал при каждом bump и давал ложные падения.
+        """
         from modules_system.verification import load_and_validate_manifest
 
         modules_dir = Path(__file__).resolve().parent.parent / "modules"
@@ -499,8 +498,8 @@ class TestRealModulesHashValidation:
 
         manifest = load_and_validate_manifest(module_dir)
         assert manifest is not None, f"hash.json модуля {module_name} не загружается"
-        assert manifest.version == expected_version, (
-            f"Модуль {module_name}: версия {manifest.version}, ожидалась {expected_version}"
+        assert manifest.version == _extract_version(module_dir), (
+            f"Модуль {module_name}: hash.json устарел — перегенерируйте"
         )
         assert isinstance(manifest.files, dict)
         assert len(manifest.files) > 0, f"Модуль {module_name}: hash.json не содержит файлов"

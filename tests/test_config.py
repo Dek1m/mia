@@ -468,8 +468,8 @@ class TestEnvMapping:
     """Таблица _ENV_TO_DOTPATH."""
 
     def test_env_mapping_count(self):
-        """Таблица ENV без секций пула/heartbeat."""
-        assert len(_ENV_TO_DOTPATH) == 21
+        """Таблица ENV без секций пула/heartbeat; worker.* — каскад WorkerConfig."""
+        assert len(_ENV_TO_DOTPATH) == 28
 
     def test_env_mapping_compound_names(self):
         """Составные имена маппятся корректно."""
@@ -482,6 +482,9 @@ class TestEnvMapping:
             "modules.dir",
             "storage.cache.backend",
             "modules.verification.mode",
+            "worker.redis_host",
+            "worker.queue",
+            "worker.log_level",
         }
         expected_numeric = set(_ENV_TO_DOTPATH.values()) - string_keys
         assert _NUMERIC_KEYS == expected_numeric
